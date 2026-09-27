@@ -56,7 +56,7 @@ for key in ("slam.sensor_timeout_sec", "slam.max_sensor_age_sec", "slam.scan_pos
     value = get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float("inf"):
         raise ValueError("Setting {} must be a finite positive number".format(key))
-for key in ("slam.scan_samples", "slam.max_cells", "slam.max_moves"):
+for key in ("slam.scan_samples", "slam.max_cells", "slam.max_moves", "gimbal.test_cycles"):
     if type(get(key)) is not int or get(key) < 1:
         raise ValueError("Setting {} must be a positive integer".format(key))
 if sorted(get("slam.direction_order")) != [0, 1, 2, 3]:
@@ -135,3 +135,8 @@ if type(get("gimbal.hold_front_on_move")) is not bool:
 value = get("navigation.front_wall_arrival_min_fraction")
 if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 1:
     raise ValueError("navigation.front_wall_arrival_min_fraction must be within (0, 1]")
+
+for key in ("gimbal.recenter_yaw_speed_dps", "gimbal.recenter_pitch_speed_dps"):
+    value = get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 360:
+        raise ValueError("Setting {} must be in (0, 360] degrees/sec".format(key))

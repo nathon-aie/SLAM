@@ -38,15 +38,18 @@ class SimulationBackend:
                     self.world.edges[self.world.edge(cell, d)] = False
         self.geometry = GridSLAM()
         self.stopped = False
+        self.initial_scan_completed = False
 
     def scan(self):
         pose = [v * setting('navigation.grid_size_m') for v in self.cell]
         ranges = {}
-        for d in range(4):
+        directions = range(4) if not self.initial_scan_completed else [(self.heading + r) % 4 for r in (0, 3, 1)]
+        for d in directions:
             expected = self.world.expected_range(self.cell, d, pose, self.geometry.offset(self.heading, d))
             if expected is None or expected <= 0:
                 raise RuntimeError('Simulation sensor geometry is invalid')
             ranges[d] = expected + self.rng.gauss(0, 0.001)
+        self.initial_scan_completed = True
         return ranges, self.heading, wrap(self.heading * 90)
 
     def move(self, direction):

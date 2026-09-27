@@ -11,6 +11,7 @@ class GimbalMotionHoldTests(unittest.TestCase):
         done = SimpleNamespace(wait_for_completed=lambda timeout: True, has_succeeded=True)
         failed = SimpleNamespace(wait_for_completed=lambda timeout: True, has_succeeded=False)
         def recenter(**kwargs):
+            self.assertEqual(kwargs, {'yaw_speed': 300, 'pitch_speed': 120})
             events.append('recenter')
             return done
         def moveto(**kwargs):

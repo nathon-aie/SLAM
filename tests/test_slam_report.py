@@ -67,7 +67,10 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(plot.name, 'map.png')
             actions = plot.parent / 'actions.html'
             self.assertTrue(actions.exists())
-            self.assertIn('Step 00', actions.read_text())
+            self.assertIn('เริ่มต้นที่ช่อง (0, 0)', actions.read_text())
+            self.assertIn('ย้อนกลับ', actions.read_text())
+            self.assertIn('เดินจริง', actions.read_text())
+            self.assertIn('ดูรายละเอียด Gimbal / ToF', actions.read_text())
             self.assertIn('BACKTRACK', actions.read_text())
             self.assertIn('id="search"', actions.read_text())
             self.assertEqual(log.name, 'events.csv')

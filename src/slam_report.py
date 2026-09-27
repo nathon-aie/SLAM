@@ -6,7 +6,6 @@ import csv
 import json
 import shutil
 from html import escape
-import textwrap
 from pathlib import Path
 from .grid_slam import GridMap, NAMES
 
@@ -24,6 +23,7 @@ def action_steps(data):
     for n, (begin, motion) in enumerate(boundaries):
         end = boundaries[n + 1][0] if n + 1 < len(boundaries) else len(events)
         actions = []
+        delta = 0
         if motion:
             delta = (motion['direction'] - heading) % 4
             if delta and not any(e['type'] == 'chassis_turn' for e in events[begin:end]):
@@ -56,7 +56,14 @@ def action_steps(data):
             elif kind in ('range_mismatch', 'wall_mismatch', 'odometry_mismatch', 'scan_position_drift', 'scan_pose_wait', 'scan_pose_recovered'):
                 actions.append('NOTE: ' + kind)
         steps.append({'completed': n == 0 or any(e['type'] == 'move' for e in events[begin:end]), 'step': n, 'from': motion['from'] if motion else data.get('start_cell', [0, 0]),
-                      'to': motion['to'] if motion else data.get('start_cell', [0, 0]), 'actions': actions})
+                      'to': motion['to'] if motion else data.get('start_cell', [0, 0]), 'actions': actions,
+                      'turn': delta, 'backtrack': bool(motion and motion.get('backtrack')),
+                      'direction': motion['direction'] if motion else heading,
+                      'distance_m': next((sum(v * d for v, d in zip(e['odometry_delta_m'],
+                          [(1, 0), (0, 1), (-1, 0), (0, -1)][e['direction']]))
+                          for e in events[begin:end] if e['type'] == 'move'), None),
+                      'warnings': sum(e['type'] in ('range_mismatch', 'wall_mismatch', 'odometry_mismatch',
+                          'scan_position_drift') for e in events[begin:end])})
     return steps
 
 
@@ -66,8 +73,26 @@ def save_actions_html(data, output):
     cards = []
     for step in steps:
         items = ''.join('<li>{}</li>'.format(escape(action)) for action in step['actions'])
-        title = 'Step {:02d} · {} → {}'.format(step['step'], tuple(step['from']), tuple(step['to']))
-        cards.append('<details class="step"><summary>{}</summary><ol>{}</ol></details>'.format(escape(title), items))
+        if step['step'] == 0:
+            title = 'เริ่มต้นที่ช่อง {}'.format(tuple(step['to']))
+            operation = 'ตั้ง Gimbal กลาง → สแกนรอบตัว → บันทึกแผนที่'
+            badge = 'จุดเริ่มต้น'
+        else:
+            title = '{} → {}'.format(tuple(step['from']), tuple(step['to']))
+            turn = {0: 'เดินตรง', 1: 'เลี้ยวขวา 90° แล้วเดิน',
+                    2: 'กลับหลัง 180° แล้วเดิน', 3: 'เลี้ยวซ้าย 90° แล้วเดิน'}[step['turn']]
+            operation = turn + ' 1 ช่อง'
+            if step['distance_m'] is not None:
+                operation += ' · เดินจริง {:.1f} ซม.'.format(step['distance_m'] * 100)
+            operation += ' → หยุด → สแกนรอบตัว' if step['completed'] else ' · ยังไม่ยืนยันถึงช่อง'
+            badge = 'ย้อนกลับ' if step['backtrack'] else 'สำรวจทางใหม่'
+        status = 'ถึงช่องแล้ว' if step['completed'] and step['step'] else 'เริ่มสำรวจ' if step['step'] == 0 else 'ไม่สำเร็จ'
+        notes = '<span class="warning">มีข้อสังเกต {} รายการ</span>'.format(step['warnings']) if step['warnings'] else ''
+        cards.append('<article class="step"><div class="heading"><span class="number">{}</span>'
+                     '<div><h2>{}</h2><span class="badge">{}</span> <span class="status">{}</span></div></div>'
+                     '<p class="operation">{}</p>{}<details><summary>ดูรายละเอียด Gimbal / ToF และ log</summary>'
+                     '<ol>{}</ol></details></article>'.format(step['step'], escape(title), badge, status,
+                                                              escape(operation), notes, items))
     header = '{} · สำรวจ {} ช่อง · เดินสำเร็จ {} ครั้ง'.format(data['status'], len(data['visited']),
         sum(e['type'] == 'move' for e in data['events']))
     page = """<!doctype html><html lang="th"><meta charset="utf-8">
@@ -77,22 +102,28 @@ body{margin:0;background:#f4f6f8;color:#203040;font:16px/1.65 system-ui,sans-ser
 main{max-width:1000px;margin:32px auto;padding:0 24px}h1{margin-bottom:0;font-size:28px}
 .meta{color:#526373}nav{position:sticky;top:0;background:#f4f6f8;padding:12px 0;display:flex;gap:8px;flex-wrap:wrap}
 input,button{font:inherit;border:1px solid #bbc9d2;border-radius:8px;padding:8px 12px;background:white}
-input{flex:1;min-width:180px}button{cursor:pointer}details{background:white;border:1px solid #dbe3e8;border-radius:10px;margin:12px 0}
+input{flex:1;min-width:180px}button{cursor:pointer}
+.step{background:white;border:1px solid #dbe3e8;border-radius:12px;margin:16px 0;padding:18px 22px}
+.heading{display:flex;align-items:center;gap:16px}.number{background:#124c72;color:white;border-radius:10px;padding:8px 12px;font-size:24px;min-width:32px;text-align:center}
+h2{font-size:23px;margin:0 0 5px}.badge{background:#e4f1f8;border-radius:6px;padding:3px 8px;font-size:14px}
+.status{color:#527363;font-size:14px}.operation{font-size:18px;margin:16px 0 8px}.warning{color:#996000;font-size:14px}
+details{border-top:1px solid #e7edf1;margin-top:12px}article[hidden]{display:none}
 summary{padding:14px 18px;font-weight:650;color:#124c72;cursor:pointer}ol{padding:0 32px 16px 52px}
 li{padding:6px;border-top:1px solid #eef1f4;overflow-wrap:anywhere}a{color:#126fa4}
 @media print{nav{display:none}details{break-inside:avoid}body{background:white}}
 </style><main><h1>รายการ Step / Action</h1><p class="meta">HEADER</p>
-<p>Step 0 คือสแกนจุดเริ่ม แต่ละ Step ถัดไปคือการเดินหรือย้อนกลับหนึ่งครั้ง
+<p>เลขบนการ์ดตรงกับเลข Step บน map · แต่ละการ์ดสรุปการเดินหนึ่งครั้ง
+รายละเอียดเซนเซอร์พับไว้ด้านล่าง เพื่อให้อ่านเส้นทางได้เร็ว
 พิกัด (x,y) คือแถวและคอลัมน์ของช่อง · <a href="map.png">เปิดแผนที่</a></p>
 <p class="meta">TURN (planned/inferred) คือคำสั่งที่วางแผนหรืออนุมานจาก log เก่า
 ARRIVED คือยืนยันถึงช่องแล้ว; FAILED คือคำสั่งไม่สำเร็จ</p>
 <nav><input id="search" type="search" placeholder="ค้นหา step, พิกัด หรือ action" aria-label="ค้นหา">
-<button onclick="toggleAll(true)">เปิดทั้งหมด</button><button onclick="toggleAll(false)">พับทั้งหมด</button></nav>
+<button onclick="toggleAll(true)">เปิดรายละเอียดทั้งหมด</button><button onclick="toggleAll(false)">พับรายละเอียดทั้งหมด</button></nav>
 CARDS</main><script>
 const steps=Array.from(document.querySelectorAll('.step'));
-function toggleAll(open){steps.forEach(s=>{if(!s.hidden)s.open=open})}
-document.getElementById('search').addEventListener('input',e=>{let q=e.target.value.trim().toLowerCase();steps.forEach(s=>{s.hidden=!s.textContent.toLowerCase().includes(q);if(q&&!s.hidden)s.open=true})});
-if(steps.length)steps[0].open=true;
+function toggleAll(open){steps.forEach(s=>{if(!s.hidden)s.querySelector('details').open=open})}
+document.getElementById('search').addEventListener('input',e=>{let q=e.target.value.trim().toLowerCase();steps.forEach(s=>{s.hidden=!s.textContent.toLowerCase().includes(q);if(q&&!s.hidden)s.querySelector('details').open=true})});
+
 </script></html>"""
     Path(output).write_text(page.replace('HEADER', escape(header)).replace('CARDS', ''.join(cards)), encoding='utf-8')
     return Path(output)
@@ -147,20 +178,31 @@ def save_report(map_file):
     if 'map_info' in data:
         axis.set_xlim(-size / 2, (data['map_info']['columns'] - 0.5) * size)
         axis.set_ylim(-size / 2, (data['map_info']['rows'] - 0.5) * size)
+        # Plot grid lines at cell boundaries, matching wall coordinates.
+        axis.set_xticks([(i - 0.5) * size for i in range(data['map_info']['columns'] + 1)])
+        axis.set_yticks([(i - 0.5) * size for i in range(data['map_info']['rows'] + 1)])
+        axis.set_axisbelow(True)
     labels = {}
     for step in steps:
         if not step['completed']:
             continue
         labels.setdefault(tuple(step['to']), []).append(str(step['step']))
     for (x, y), numbers in labels.items():
-        axis.text(y * size, x * size, '\n'.join(textwrap.wrap(','.join(numbers), width=12)),
-                  ha='center', va='center', fontsize=8, color='#124c72', weight='bold')
+        # One clear badge per step, stacked within its cell. Offset from the
+        # estimated route and start/end markers rather than printing over them.
+        spacing = min(0.19, 0.6 / max(1, len(numbers))) * size
+        for index, number in enumerate(numbers):
+            vertical = ((len(numbers) - 1) / 2 - index) * spacing
+            axis.text((y + 0.18) * size, x * size + vertical, number,
+                      ha='center', va='center', fontsize=13, color='#124c72', weight='bold',
+                      zorder=10, bbox=dict(boxstyle='round,pad=0.22', facecolor='white',
+                                          edgecolor='#87b4d0', linewidth=1))
     axis.set_aspect('equal')
     axis.set_xlabel('Initial right axis y (m)')
     axis.set_ylabel('Initial forward axis x (m)')
-    axis.set_title('Explored map and trajectory | {} | {} cells'.format(data['status'], len(data['visited'])))
+    axis.set_title('Explored map | {} | {} cells\nNumbered badges = movement steps (top to bottom)'.format(data['status'], len(data['visited'])))
     axis.legend(loc='best')
-    axis.grid(alpha=0.15)
+    axis.grid(which='major', color='#b6c5d0', linewidth=0.7, alpha=0.65)
 
     figure.tight_layout()
     save_actions_html(data, path.with_name(path.stem + '_actions.html'))

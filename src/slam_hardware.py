@@ -19,6 +19,7 @@ class HardwareBackend:
         self.scan_headings = None
         self.scan_origin = None
         self.scan_position_warning_logged = False
+        self.initial_scan_completed = False
         self.gimbal_reference_ready = False
         self.commanded_gimbal_yaw = None
         self.controller.strict_sensors = True
@@ -109,15 +110,19 @@ class HardwareBackend:
         if getattr(self, 'scan_origin', None) is None:
             self.controller.stop_chassis()
 
+    def recenter_gimbal(self, name='Gimbal recenter'):
+        self.controller.front_ready = False
+        self.action_completed(self.robot.gimbal.recenter(
+            yaw_speed=setting('gimbal.recenter_yaw_speed_dps'),
+            pitch_speed=setting('gimbal.recenter_pitch_speed_dps')), name=name)
+        self.commanded_gimbal_yaw = 0.0
+        self.gimbal_reference_ready = True
+        self.log_gimbal('recenter_completed', 0, self.hub.get_latest_state())
+
     def initialize_gimbal_reference(self):
         if self.gimbal_reference_ready:
             return
-        self.action_completed(self.robot.gimbal.recenter(
-            yaw_speed=setting('gimbal.yaw_speed_dps'),
-            pitch_speed=setting('gimbal.pitch_speed_dps')), name='Initial Gimbal recenter')
-        # Recenter defines the commanded origin, without angle-based trimming.
-        self.commanded_gimbal_yaw = 0.0
-        self.gimbal_reference_ready = True
+        self.recenter_gimbal(name='Initial Gimbal recenter')
         self.log_gimbal('reference_initialized', 0, self.hub.get_latest_state())
 
     def hold_front_for_motion(self):
@@ -133,7 +138,7 @@ class HardwareBackend:
             self.commanded_gimbal_yaw = 0.0
             self.log_gimbal('front_position_hold', 0, self.hub.get_latest_state())
 
-    def aim(self, yaw):
+    def aim(self, yaw, direct=False):
         """Execute planned relative moves only; never trim from angle feedback."""
         self.ensure_running()
         self.stop_scan_chassis()
@@ -145,7 +150,7 @@ class HardwareBackend:
             # Subsequent commands use the commanded reference, not measured error.
             remaining = yaw - self.commanded_gimbal_yaw
             while abs(remaining) > 0.01:
-                step = max(-setting('gimbal.move_step_deg'), min(setting('gimbal.move_step_deg'), remaining))
+                step = remaining if direct else max(-setting('gimbal.move_step_deg'), min(setting('gimbal.move_step_deg'), remaining))
                 state = self.gimbal_state()
                 self.log_gimbal('move', yaw, state, delta_yaw=step, delta_pitch=0)
                 self.action_completed(self.robot.gimbal.move(
@@ -236,8 +241,8 @@ class HardwareBackend:
         self.heading = direction
         self.align_heading()
 
-    def scan(self):
-        mode = setting('gimbal.scan_mode')
+    def scan(self, mode=None):
+        mode = setting('gimbal.scan_mode') if mode is None else mode
         if mode == 'chassis':
             self.controller.stop_chassis()
             self.align_heading()
@@ -251,6 +256,7 @@ class HardwareBackend:
             self.scan_position_warning_logged = False
             self.ensure_running()
         start_heading = self.heading
+        scan_rear = not getattr(self, 'initial_scan_completed', False)
         ranges = {}
         self.scan_headings = {}
         completed = False
@@ -258,7 +264,7 @@ class HardwareBackend:
         try:
             if mode == 'chassis':
                 self.aim(0)
-                for relative in range(4):
+                for relative in ((0, 1, 2, 3) if scan_rear else (0, 3, 1)):
                     direction = (start_heading + relative) % 4
                     self.face(direction)
                     ranges[direction] = self.sample(0, self.aim(0))
@@ -270,17 +276,19 @@ class HardwareBackend:
                 if not getattr(self, 'gimbal_reference_ready', False):
                     self.initialize_gimbal_reference()
                 else:
-                    self.log_gimbal('reference_reused', 0, self.gimbal_state())
-                for relative, yaw in ((0, 0), (3, -90), (2, -180), (1, 90)):
-                    if yaw == 90:
-                        self.aim(0)
+                    self.recenter_gimbal()
+                # Initial sweep: left -> rear -> directly right, without revisiting left.
+                directions = ((0, 0), (3, -90), (2, -180), (1, 90)) if scan_rear else ((0, 0), (3, -90), (1, 90))
+                for relative, yaw in directions:
                     direction = (start_heading + relative) % 4
-                    ranges[direction] = self.sample(yaw, self.aim(yaw))
+                    ranges[direction] = self.sample(yaw, self.aim(yaw, direct=(yaw == 90)))
                     self.scan_headings[direction] = start_heading
+                self.recenter_gimbal()
             self.sample(0, self.aim(0))
             self.ensure_running()
             state = self.hub.get_latest_state()
             completed = True
+            self.initial_scan_completed = True
             return ranges, self.heading, state.yaw
         finally:
             self.controller.front_ready = False

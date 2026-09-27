@@ -66,8 +66,6 @@ class HardwareFlowTests(unittest.TestCase):
         commanded_yaws = []
         class Gimbal:
             def recenter(self, yaw_speed, pitch_speed):
-                if recenter_calls:
-                    raise AssertionError('Repeated recenter after chassis motion')
                 recenter_calls.append(True)
                 state.gimbal = 0.0
                 return done
@@ -121,16 +119,21 @@ class HardwareFlowTests(unittest.TestCase):
             self.assertEqual(len(wheel_stops), explorer.moves)
             data = json.loads(output.read_text())
             self.assertEqual(data['status'], 'completed')
+            self.assertEqual(len(data['scans'][0]['ranges_m']), 4)
+            for scan in data['scans'][1:]:
+                self.assertEqual(len(scan['ranges_m']), 3)
+                rear = (scan['heading'] + 2) % 4
+                self.assertNotIn(['N', 'E', 'S', 'W'][rear], scan['ranges_m'])
             self.assertTrue(all(event['mode'] == mode for event in data['events'] if event['type'] == 'scan_mode'))
             if mode == 'gimbal':
-                self.assertEqual(len(recenter_calls), 1)
+                self.assertEqual(len(recenter_calls), 2 * len(data['scans']))
                 settled = [event['target_yaw'] for event in data['events']
                            if event['type'] == 'gimbal' and event.get('phase') == 'move_completed']
-                # First scan: recenter, front, left, rear, centre, right, front.
-                self.assertEqual(settled[:6], [0, -90, -180, 0, 90, 0])
-                # Each 90-degree transition is one SDK move, not two 45s.
-                # The 180-degree return through centre takes two 90s.
-                self.assertEqual(commanded_yaws[:6], [-90, -180, -90, 0, 90, 0])
+                self.assertEqual(settled[:5], [0, -90, -180, 90, 0])
+                self.assertEqual(commanded_yaws[:3], [-90, -180, 90])
+                deltas = [e['delta_yaw'] for e in data['events'] if e['type'] == 'gimbal' and e.get('phase') == 'move']
+                self.assertEqual(deltas.count(180), len(data['scans']) - 1)
+                self.assertNotIn(-180, commanded_yaws[3:])
                 self.assertEqual(mode_changes, [])
                 self.assertEqual(gimbal_speed_commands, [])
             else:

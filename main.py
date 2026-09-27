@@ -320,6 +320,51 @@ def cmd_calibrate(args):
     return 0
 
 
+def cmd_gimbal_test(args):
+    """Scan without starting the queued motion worker."""
+    from src.slam_hardware import HardwareBackend
+    from src.sdk_connection import cancel_chassis_speed_timer
+    if args.cycles < 1:
+        print('[Gimbal test] จำนวนรอบต้องมากกว่า 0')
+        return 1
+    system = RobotSystem(calibration_file=args.calibration, conn_type=args.conn_type)
+    backend = None
+    status, error = 'failed', ''
+    try:
+        if not system.connect_robot():
+            return 1
+        system.setup_threads()
+        system.thread_1_sensor.start_collecting()
+        system.thread_2_controller._running.set()
+        backend = HardwareBackend(system)
+        deadline = time.monotonic() + setting('slam.sensor_timeout_sec')
+        while system.sensor_hub.get_latest_state().frame_index == 0:
+            if time.monotonic() > deadline:
+                raise RuntimeError('No initial position/attitude data')
+            time.sleep(0.01)
+        # This test never starts chassis motion. Send one stop request, but a
+        # missing ACK must not prevent testing the Gimbal on an idle chassis.
+        cancel_chassis_speed_timer(system.robot.chassis)
+        stopped = system.robot.chassis.drive_wheels(w1=0, w2=0, w3=0, w4=0)
+        if stopped is not True:
+            print('[Gimbal test] ส่งคำสั่งหยุดล้อแล้ว แต่ SDK ไม่ตอบรับ — เริ่มทดสอบ Gimbal')
+        backend.wait_stationary_pose()
+        for cycle in range(args.cycles):
+            print('[Gimbal test] รอบ {}/{} — สแกน {} ทิศ (Ctrl+C เพื่อหยุด)'.format(
+                cycle + 1, args.cycles, 4 if cycle == 0 else 3))
+            # Always use Gimbal scans, regardless of the exploration scan mode.
+            ranges, _, _ = backend.scan(mode='gimbal')
+            print('[Gimbal test] ToF (m): {}'.format(ranges))
+        status = 'completed'
+    except (Exception, KeyboardInterrupt) as exc:
+        status = 'interrupted' if isinstance(exc, KeyboardInterrupt) else 'failed'
+        error = str(exc)
+        print('[Gimbal test] {}: {}'.format(status, error or 'หยุดโดยผู้ใช้'))
+    finally:
+        system.shutdown(save_telemetry=False, run_analysis=False)
+    return 0 if status == 'completed' else 1
+
+
 def cmd_explore(args):
     from src.grid_slam import DFSExplorer
     if args.mock:
@@ -390,6 +435,11 @@ def main():
     explore_p.add_argument("--output", default=project_path("slam.output"), help="Output map JSON (including partial runs)")
     explore_p.add_argument("--conn-type", choices=("ap", "sta"), default=setting("robot.conn_type"))
     explore_p.add_argument("--calibration", default=project_path("paths.calibration"))
+
+    gimbal_p = subparsers.add_parser("gimbal-test", help="Test stationary Gimbal scans on the real robot")
+    gimbal_p.add_argument("--cycles", type=int, default=setting("gimbal.test_cycles"))
+    gimbal_p.add_argument("--conn-type", choices=("ap", "sta"), default=setting("robot.conn_type"))
+    gimbal_p.add_argument("--calibration", default=project_path("paths.calibration"))
 
     eval_p = subparsers.add_parser("evaluate-map", help="Compare an explored map with offline ground truth")
     eval_p.add_argument("map_file", help="Exploration output JSON")
@@ -480,6 +530,8 @@ def main():
 
     if args.command == "explore":
         return cmd_explore(args)
+    elif args.command == "gimbal-test":
+        return cmd_gimbal_test(args)
     elif args.command == "evaluate-map":
         return cmd_evaluate_map(args)
     elif args.command == "simulate":

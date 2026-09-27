@@ -221,7 +221,12 @@ class DFSExplorer:
             while True:
                 cell = self.slam.cell
                 ranges, heading, yaw = self.backend.scan()
-                if set(ranges) != set(range(4)):
+                rear = (heading + 2) % 4
+                required = {(heading + r) % 4 for r in (0, 3, 1)}
+                full_scan = set(ranges) == set(range(4))
+                known_rear_scan = (self.moves > 0 and set(ranges) == required
+                                   and self.slam.map.wall(cell, rear) is False)
+                if not (full_scan or known_rear_scan):
                     raise RuntimeError('Incomplete scan; unknown directions cannot be traversed')
                 self.slam.update(ranges, heading, yaw, getattr(self.backend, "scan_headings", None))
                 self.slam.export(self.output, self.status)

@@ -48,7 +48,7 @@ navigation:
   align_duration_sec: 0.3
   align_default_duration_sec: 0.4
   step_pause_sec: 1.0
-  turn_speed_dps: 45
+  turn_speed_dps: 90
   turn_settle_sec: 0.20
   duration_sec: 0
 
@@ -73,6 +73,9 @@ calibration:
   degrees: {sharp_left: 2, sharp_right: 2, tof: 1}
 
 gimbal:
+  test_cycles: 2
+  recenter_yaw_speed_dps: 300
+  recenter_pitch_speed_dps: 120
   # chassis: turn in place with ToF facing forward; gimbal: requires full yaw range
   scan_mode: gimbal
   pitch_deg: 0
@@ -80,6 +83,7 @@ gimbal:
   pitch_speed_dps: 60
   settle_sec: 0.35
   action_timeout_sec: 8
+  # Other travel segments; left -> right sweep uses one 180-degree move
   move_step_deg: 90
   # One absolute front position command before chassis motion; no feedback trims
   hold_front_on_move: true
@@ -91,8 +95,8 @@ gimbal:
 # ขนาดและจุดเริ่มไม่กำหนดว่ามีกำแพงที่ใด กำแพงยังต้องสำรวจจาก ToF
 
 map:
-  rows: 5
-  columns: 4
+  rows: 4
+  columns: 3
   start:
     x: 0
     y: 0

@@ -78,6 +78,7 @@ class GimbalFeedbackTests(unittest.TestCase):
         backend.align_heading = Mock()
         backend.wait_stationary_pose = Mock(return_value=RobotSensorSnapshot())
         backend.initialize_gimbal_reference = Mock()
+        backend.recenter_gimbal = Mock()
         backend.aim = Mock(side_effect=[100, RuntimeError('Cleanup failed')])
         backend.sample = Mock(side_effect=RuntimeError('No ToF reading'))
         with patch.dict(SETTINGS['gimbal'], {'scan_mode': 'gimbal'}):

@@ -41,9 +41,12 @@ def select_operation():
             ('ทดสอบชุดคำสั่งเคลื่อนที่', 'motion'),
             ('Calibration เซนเซอร์', 'calibrate'),
             ('วิเคราะห์ผลการสำรวจ / Log', 'analysis'),
+            ('ทดสอบเฉพาะ Gimbal (หุ่นจริง ไม่เดิน)', 'gimbal-test'),
         ])
         if task is None:
             return None
+        if task == 'gimbal-test':
+            return [task]
         if task in ('explore', 'step-test', 'turn-test', 'monitor', 'motion'):
             mock = mode()
             if mock is None:

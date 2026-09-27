@@ -24,6 +24,7 @@ class StationaryScanTests(unittest.TestCase):
         backend.align_heading = Mock()
         backend.wait_stationary_pose = Mock(return_value=state)
         backend.initialize_gimbal_reference = Mock()
+        backend.recenter_gimbal = Mock()
         backend.aim = Mock(return_value=100)
         backend.sample = Mock(return_value=1)
         with patch.dict(SETTINGS['gimbal'], {'scan_mode': 'gimbal'}):

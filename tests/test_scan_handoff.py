@@ -58,6 +58,7 @@ class ScanHandoffTests(unittest.TestCase):
         def recenter():
             sleep(0.5)
             backend.ensure_running()
+        backend.recenter_gimbal = Mock()
         backend.initialize_gimbal_reference = Mock(side_effect=recenter)
         backend.aim = Mock(return_value=0)
         backend.sample = Mock(return_value=1)

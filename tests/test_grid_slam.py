@@ -119,6 +119,20 @@ class GridSLAMTests(unittest.TestCase):
                     self.assertGreater(result['landmark_matches'], 0)
                     self.assertLess(math.hypot(*result['pose'][:2]), 0.03)
 
+    def test_three_direction_scan_at_start_does_not_invent_rear_range(self):
+        class MissingInitialRear(SimulationBackend):
+            def scan(self):
+                ranges, heading, yaw = super().scan()
+                ranges.pop((heading + 2) % 4)
+                return ranges, heading, yaw
+        with tempfile.TemporaryDirectory() as folder:
+            backend = MissingInitialRear()
+            explorer = DFSExplorer(backend, Path(folder) / 'map.json')
+            self.assertFalse(explorer.run())
+            self.assertIn('Incomplete scan', explorer.error)
+            self.assertEqual(explorer.moves, 0)
+            self.assertTrue(backend.stopped)
+
     def test_failed_scan_saves_partial_map_and_stops(self):
         class Broken(SimulationBackend):
             def scan(self):

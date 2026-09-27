@@ -38,21 +38,13 @@ scan matching แบบอิสระทุกมุม หรือแก้�
 จนระบุช่องไม่ได้จะหยุด ไม่พยายาม relocalize ในเขาวงกตที่กำแพงเหมือนกันหลายจุด
 ทางเดินยาวที่ไม่เห็น landmark ตามแนวเดินอาจมีความไม่แน่นอนสะสมจนต้องหยุด
 
-# กลุ่ม ภัยพิบัติทั้ง 4 (PhaiPiBud_Thang_Si)
-## 👥 สมาชิกในกลุ่ม
-1. **นายคุณัชญ์ ทวีรัตน์** รหัสนักศึกษา 6810110038
-2. **นายชัชนันท์ บุญส่ง** รหัสนักศึกษา 6810110055
-3. **นายพลกฤต บัวลอย** รหัสนักศึกษา 6810110223
-4. **นายศุภกิตต์ เชี่ยวหมอน** รหัสนักศึกษา 6810110354
-
-
 ## ติดตั้ง
 
 รองรับ Python 3.8:
 
 ```bash
 python -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ## เมนูเลือกงาน
@@ -60,7 +52,7 @@ python -m venv .venv
 รันโดยไม่ต้องเติมคำสั่งต่อท้าย:
 
 ```bash
-.venv/bin/python main.py
+python main.py
 ```
 
 เลือกหมายเลขงาน: สำรวจ SLAM/DFS, ทดสอบเดินหนึ่งช่อง, ทดสอบเลี้ยว,
@@ -80,13 +72,13 @@ python -m venv .venv
 
 ```bash
 # สำรวจสนามจำลองที่สร้างระหว่างรัน ไม่มีไฟล์แผนที่หรือเส้นทางเป็น input
-.venv/bin/python main.py explore --mock --output /tmp/explored_map.json
+python main.py explore --mock --output /tmp/explored_map.json
 
 # เชื่อมต่อ Wi-Fi AP ของหุ่น แล้วสำรวจสนามจริง
-.venv/bin/python main.py explore --conn-type ap
+python main.py explore --conn-type ap
 
 # ระบุตำแหน่งผลลัพธ์เอง
-.venv/bin/python main.py explore --conn-type ap --output data/my_exploration.json
+python main.py explore --conn-type ap --output data/my_exploration.json
 ```
 
 ค่าเริ่มต้นบันทึก `data/explored_map.json` ทุกครั้งที่สแกนสำเร็จ และตอนสิ้นสุด/ล้มเหลว
@@ -129,7 +121,7 @@ JSON รายงานจุดเริ่มตาม `map.start`, ขนา�
 เทียบ Ground Truth **หลังภารกิจ** ด้วย:
 
 ```bash
-.venv/bin/python main.py evaluate-map data/explored_map.json data/ground_truth.json
+python main.py evaluate-map data/explored_map.json data/ground_truth.json
 ```
 
 รูปแบบ Ground Truth (ต้องใช้พิกัด/ทิศเดียวกับผลสำรวจ):
@@ -218,12 +210,12 @@ Telemetry บันทึกมุมทั้งแบบสัมพันธ�
 `run` และ `simulate` ยังใช้ทดสอบคำสั่งเคลื่อนที่ที่ระบุเอง แยกจากคำสั่งสำรวจ `explore`
 
 ```bash
-.venv/bin/python main.py simulate --commands 'fwd 1, right, fwd 1' -y
-.venv/bin/python main.py step-test --cells 1 --conn-type ap
-.venv/bin/python main.py turn-test --direction right --mock
-.venv/bin/python main.py monitor --conn-type ap
-.venv/bin/python main.py analyze telemetry_logs/run1
-.venv/bin/python main.py calibrate fit data/calibration_measurements.csv
+python main.py simulate --commands 'fwd 1, right, fwd 1' -y
+python main.py step-test --cells 1 --conn-type ap
+python main.py turn-test --direction right --mock
+python main.py monitor --conn-type ap
+python main.py analyze telemetry_logs/run1
+python main.py calibrate fit data/calibration_measurements.csv
 ```
 
 ## โครงสร้าง
@@ -242,8 +234,8 @@ Telemetry บันทึกมุมทั้งแบบสัมพันธ�
 ## ตรวจสอบระบบ
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v
-.venv/bin/python -m compileall -q main.py src tests
+python -m unittest discover -s tests -v
+python -m compileall -q main.py src tests
 ```
 
 ## เอกสารเพิ่มเติม

@@ -27,7 +27,7 @@ class HardwareBackend:
         self.controller.front_ready = False
 
     def ensure_running(self):
-        if not self.controller._running.is_set():
+        if not self.controller.is_running():
             raise RuntimeError('Motion was interrupted')
         waited = 0.0
         origin = getattr(self, 'scan_origin', None)
@@ -38,7 +38,7 @@ class HardwareBackend:
                 deadline = started + setting('slam.scan_pose_recovery_timeout_sec')
                 self.event_log.append({'timestamp': time.time(), 'type': 'scan_pose_wait'})
                 while not self.fresh(state, ['attitude_received_at', 'position_received_at']):
-                    if not self.controller._running.is_set():
+                    if not self.controller.is_running():
                         raise RuntimeError('Motion was interrupted')
                     if time.monotonic() >= deadline:
                         raise RuntimeError('Stationary scan: stale chassis pose persisted for {:.2f}s'.format(
@@ -292,7 +292,7 @@ class HardwareBackend:
             return ranges, self.heading, state.yaw
         finally:
             self.controller.front_ready = False
-            if not completed and mode == 'gimbal' and self.controller._running.is_set():
+            if not completed and mode == 'gimbal' and self.controller.is_running():
                 try:
                     self.aim(0)
                 except Exception as exc:

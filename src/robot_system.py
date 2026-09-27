@@ -7,25 +7,19 @@ Thread 2 (Robot Motion Controller), and Telemetry Logging.
 
 try:
     from .settings import get as setting, project_path
-    from .sdk_connection import initialize_robot
+    from .sdk_connection import initialize_robot, load_robot_sdk
 except ImportError:
     from settings import get as setting, project_path
-    from sdk_connection import initialize_robot
+    from sdk_connection import initialize_robot, load_robot_sdk
 
-import os
-import signal
-import sys
 import time
-from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 try:
-    from . import calibrate
     from .robot_controller import RobotControllerThread
     from .sensor_pipeline import CalibrationManager, SensorCollectorThread, SensorHub
     from .telemetry import TelemetryAnalyzer, TelemetryRecorder
 except (ImportError, ValueError):
-    import calibrate
     from robot_controller import RobotControllerThread
     from sensor_pipeline import CalibrationManager, SensorCollectorThread, SensorHub
     from telemetry import TelemetryAnalyzer, TelemetryRecorder
@@ -39,10 +33,8 @@ class RobotSystem:
         calibration_file: str = project_path("paths.calibration"),
         telemetry_dir: str = project_path("paths.telemetry"),
         sensor_rate_hz: float = setting("sensors.rate_hz"),
-        mock_mode: bool = False,
         conn_type: str = setting("robot.conn_type"),
     ):
-        self.mock_mode = mock_mode
         self.conn_type = conn_type
         self.robot = None
 
@@ -58,13 +50,9 @@ class RobotSystem:
 
     def connect_robot(self) -> bool:
         """Initializes connection to RoboMaster EP hardware."""
-        if self.mock_mode:
-            print("[RobotSystem] Running in SIMULATION / MOCK mode (No physical hardware needed).")
-            return True
-
         print(f"[RobotSystem] Connecting to RoboMaster EP via {self.conn_type.upper()}...")
         try:
-            robot_mod = calibrate.load_robot_sdk()
+            robot_mod = load_robot_sdk()
             self.robot = robot_mod.Robot()
             initialize_robot(self.robot, self.conn_type)
             if self.robot.set_robot_mode(mode=robot_mod.CHASSIS_LEAD) is False:
@@ -73,8 +61,6 @@ class RobotSystem:
             return True
         except Exception as exc:
             print(f"[RobotSystem] Connection failed: {exc}")
-            print("[RobotSystem] Switching to MOCK mode fallback.")
-            self.mock_mode = True
             if self.robot is not None:
                 try:
                     self.robot.close()
@@ -85,6 +71,8 @@ class RobotSystem:
 
     def setup_threads(self):
         """Spawns Thread 1 and Thread 2 with thread-safe shared memory."""
+        if self.robot is None:
+            raise RuntimeError("Robot is not connected")
         # Thread 1: Sensor Collection + Filtering
         self.thread_1_sensor = SensorCollectorThread(
             sensor_hub=self.sensor_hub,
@@ -92,18 +80,13 @@ class RobotSystem:
             calibration_manager=self.calibration_mgr,
             telemetry_recorder=self.telemetry,
             update_rate_hz=self.sensor_rate_hz,
-            mock_mode=self.mock_mode,
         )
 
         # Thread 2: Robot Motion Controller
         self.thread_2_controller = RobotControllerThread(
             sensor_hub=self.sensor_hub,
             robot=self.robot,
-            mock_mode=self.mock_mode,
         )
-
-        if self.mock_mode and self.thread_2_controller.mock_actuator:
-            self.thread_2_controller.mock_actuator.collector = self.thread_1_sensor
 
     def start(self):
         """Starts both Thread 1 and Thread 2."""
@@ -150,6 +133,6 @@ class RobotSystem:
                 pass
 
         if save_telemetry:
-            json_p, csv_p = self.telemetry.export()
+            json_p = self.telemetry.export()
             if run_analysis:
                 TelemetryAnalyzer.analyze_file(str(json_p), save_plot=True)

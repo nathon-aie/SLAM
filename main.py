@@ -1,29 +1,11 @@
 #!/usr/bin/env python3
-"""RoboMaster EP sensor and motion tools for the SLAM project.
-
-Examples:
-    python main.py  # Interactive operation menu
-    python main.py step-test --cells 1 --mock
-    python main.py simulate --commands 'fwd 1, right' -y
-    python main.py monitor --conn-type ap
-    python main.py calibrate fit data/calibration_measurements.csv
-
-    python main.py explore --mock
-    python main.py explore --conn-type ap
-"""
+"""RoboMaster EP: live SLAM, motion, sensors and calibration tools."""
 
 import argparse
-import os
 import signal
 import sys
 import time
 from pathlib import Path
-
-# Add src to sys.path
-_SRC_DIR = Path(__file__).resolve().parent / "src"
-if str(_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_DIR))
-
 
 import json
 from typing import List
@@ -98,29 +80,6 @@ def run_navigation(sys_runner: RobotSystem, args):
     return commands_completed
 
 
-def cmd_simulate(args):
-    print("=" * 65)
-    print("🤖 STARTING STEP 3 MULTI-THREADING SIMULATION (PID GRID NAVIGATION)")
-    print("=" * 65)
-    sys_runner = RobotSystem(
-        calibration_file=args.calibration,
-        sensor_rate_hz=args.rate,
-        mock_mode=True,
-    )
-    sys_runner.connect_robot()
-
-    def sig_handler(sig, frame):
-        print("\nInterrupt received. Stopping...")
-        sys_runner.shutdown()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, sig_handler)
-    try:
-        run_navigation(sys_runner, args)
-    finally:
-        sys_runner.shutdown()
-
-
 def cmd_run(args):
     print("=" * 65)
     print("🤖 STARTING STEP 3 LIVE MULTI-THREADING RUN (PID GRID CONTROL)")
@@ -128,11 +87,10 @@ def cmd_run(args):
     sys_runner = RobotSystem(
         calibration_file=args.calibration,
         sensor_rate_hz=args.rate,
-        mock_mode=False,
         conn_type=args.conn_type,
     )
     connected = sys_runner.connect_robot()
-    if not connected and not args.allow_mock_fallback:
+    if not connected:
         print("[Error] Failed to connect to robot hardware. Exiting.")
         return 1
 
@@ -156,10 +114,11 @@ def cmd_step_test(args):
     sys_runner = RobotSystem(
         calibration_file=args.calibration,
         sensor_rate_hz=args.rate,
-        mock_mode=args.mock,
         conn_type=args.conn_type,
     )
-    sys_runner.connect_robot()
+    if not sys_runner.connect_robot():
+        sys_runner.shutdown(save_telemetry=False, run_analysis=False)
+        return 1
     sys_runner.setup_threads()
 
     if sys_runner.thread_2_controller:
@@ -204,10 +163,11 @@ def cmd_turn_test(args):
     sys_runner = RobotSystem(
         calibration_file=args.calibration,
         sensor_rate_hz=args.rate,
-        mock_mode=args.mock,
         conn_type=args.conn_type,
     )
-    sys_runner.connect_robot()
+    if not sys_runner.connect_robot():
+        sys_runner.shutdown(save_telemetry=False, run_analysis=False)
+        return 1
     sys_runner.setup_threads()
 
     if sys_runner.thread_2_controller:
@@ -232,10 +192,11 @@ def cmd_monitor(args):
     sys_runner = RobotSystem(
         calibration_file=args.calibration,
         sensor_rate_hz=args.rate,
-        mock_mode=args.mock,
         conn_type=args.conn_type,
     )
-    sys_runner.connect_robot()
+    if not sys_runner.connect_robot():
+        sys_runner.shutdown(save_telemetry=False, run_analysis=False)
+        return 1
     sys_runner.setup_threads()
 
     def sig_handler(sig, frame):
@@ -303,7 +264,7 @@ def cmd_calibrate(args):
     try:
         from src.calibrate import collect_live, fit_command, init_csv
     except ImportError:
-        from calibrate import collect_live, fit_command, init_csv
+        from src.calibrate import collect_live, fit_command, init_csv
     try:
         if args.cal_cmd == "init-csv":
             init_csv(args.path)
@@ -335,7 +296,7 @@ def cmd_gimbal_test(args):
             return 1
         system.setup_threads()
         system.thread_1_sensor.start_collecting()
-        system.thread_2_controller._running.set()
+        system.thread_2_controller.enable_motion()
         backend = HardwareBackend(system)
         deadline = time.monotonic() + setting('slam.sensor_timeout_sec')
         while system.sensor_hub.get_latest_state().frame_index == 0:
@@ -367,63 +328,42 @@ def cmd_gimbal_test(args):
 
 def cmd_explore(args):
     from src.grid_slam import DFSExplorer
-    if args.mock:
-        from src.slam_simulation import SimulationBackend
-        explorer = DFSExplorer(SimulationBackend(), args.output)
+    from src.slam_hardware import HardwareBackend
+    system = RobotSystem(calibration_file=args.calibration, conn_type=args.conn_type)
+    explorer = None
+    recorder = system.telemetry
+    map_file = Path(recorder.run_dir) / '{}_{}_map.json'.format(recorder.run_name, recorder.timestamp_str)
+    try:
+        if not system.connect_robot():
+            return 1
+        system.setup_threads()
+        system.thread_1_sensor.start_collecting()
+        system.thread_2_controller.enable_motion()
+        explorer = DFSExplorer(HardwareBackend(system), map_file)
+        deadline = time.monotonic() + setting("slam.sensor_timeout_sec")
+        while system.sensor_hub.get_latest_state().frame_index == 0:
+            if time.monotonic() > deadline:
+                raise RuntimeError("No initial position/attitude data")
+            time.sleep(0.01)
         success = explorer.run()
-    else:
-        from src.slam_hardware import HardwareBackend
-        system = RobotSystem(calibration_file=args.calibration, conn_type=args.conn_type)
-        explorer = None
-        try:
-            if not system.connect_robot():
-                return 1  # Exploration never silently falls back to a simulated world.
-            system.setup_threads()
-            system.thread_1_sensor.start_collecting()
-            system.thread_2_controller._running.set()
-            explorer = DFSExplorer(HardwareBackend(system), args.output)
-            deadline = time.monotonic() + setting("slam.sensor_timeout_sec")
-            while system.sensor_hub.get_latest_state().frame_index == 0:
-                if time.monotonic() > deadline:
-                    raise RuntimeError("No initial position/attitude data")
-                time.sleep(0.01)
-            success = explorer.run()
-        except (Exception, KeyboardInterrupt) as exc:
-            if explorer is None:
-                print("[SLAM] Startup failed: {}".format(exc))
-                return 1
-            explorer.status = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
-            explorer.error = str(exc)
-            explorer.slam.export(explorer.output, explorer.status, explorer.error)
-            success = False
-        finally:
-            system.shutdown()
-    from src.slam_report import save_run_report
-    if args.mock:
-        from src.telemetry import TelemetryRecorder
-        recorder = TelemetryRecorder()
-    else:
-        recorder = system.telemetry
-    archive, plot, log = save_run_report(explorer.output, recorder.run_dir,
-        '{}_{}'.format(recorder.run_name, recorder.timestamp_str))
-    print('[SLAM] archived map={}'.format(archive))
-    print("[SLAM] map={} | actions={} | log={}".format(plot, plot.parent / "actions.html", log))
-    print("[SLAM] {} | visited={} | moves={} | map={}".format(
+    except (Exception, KeyboardInterrupt) as exc:
+        if explorer is None:
+            print("[SLAM] Startup failed: {}".format(exc))
+            return 1
+        explorer.status = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
+        explorer.error = str(exc)
+        explorer.slam.export(explorer.output, explorer.status, explorer.error)
+        success = False
+    finally:
+        system.shutdown()
+    from src.slam_report import save_report
+    plot, actions = save_report(explorer.output)
+    print("[SLAM] map={} | actions={}".format(plot, actions))
+    print("[SLAM] {} | visited={} | moves={} | data={}".format(
         explorer.status, len(explorer.slam.map.visited), explorer.moves, explorer.output))
     if explorer.error:
         print("[SLAM] " + explorer.error)
     return 0 if success else 1
-
-
-def cmd_evaluate_map(args):
-    from src.slam_report import evaluate
-    metrics = evaluate(args.map_file, args.ground_truth)
-    output = Path(args.output) if args.output else Path(args.map_file).with_name(Path(args.map_file).stem + "_metrics.json")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(metrics, indent=2))
-    print("[SLAM] metrics={}".format(output))
-    return 0
 
 
 def main():
@@ -431,8 +371,6 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     explore_p = subparsers.add_parser("explore", help="Build a map while exploring with Grid SLAM and DFS")
-    explore_p.add_argument("--mock", action="store_true", help="Procedural sensor-world simulation")
-    explore_p.add_argument("--output", default=project_path("slam.output"), help="Output map JSON (including partial runs)")
     explore_p.add_argument("--conn-type", choices=("ap", "sta"), default=setting("robot.conn_type"))
     explore_p.add_argument("--calibration", default=project_path("paths.calibration"))
 
@@ -440,11 +378,6 @@ def main():
     gimbal_p.add_argument("--cycles", type=int, default=setting("gimbal.test_cycles"))
     gimbal_p.add_argument("--conn-type", choices=("ap", "sta"), default=setting("robot.conn_type"))
     gimbal_p.add_argument("--calibration", default=project_path("paths.calibration"))
-
-    eval_p = subparsers.add_parser("evaluate-map", help="Compare an explored map with offline ground truth")
-    eval_p.add_argument("map_file", help="Exploration output JSON")
-    eval_p.add_argument("ground_truth", help="Post-run ground-truth JSON; never used for navigation")
-    eval_p.add_argument("--output", help="Metrics JSON output")
 
     # 1. Run live
     run_p = subparsers.add_parser("run", help="Run explicit motion test commands on the robot")
@@ -456,17 +389,6 @@ def main():
     run_p.add_argument("--nominal-side", type=float, default=setting("navigation.nominal_side_mm"), help="Nominal distance to single wall (mm)")
     run_p.add_argument("--duration", type=float, default=setting("navigation.duration_sec"), help="Max duration in seconds")
     run_p.add_argument("-y", "--yes", action="store_true", help="Auto-confirm all interactive prompts")
-    run_p.add_argument("--allow-mock-fallback", action="store_true", help="Fallback to mock if robot unavailable")
-
-    # 2. Simulate
-    sim_p = subparsers.add_parser("simulate", help="Simulate explicit motion test commands")
-    sim_p.add_argument("--commands", required=True, help="Motion test commands (e.g. 'fwd 1, left, fwd 1')")
-    sim_p.add_argument("--calibration", default=project_path("paths.calibration"))
-    sim_p.add_argument("--rate", type=float, default=setting("sensors.rate_hz"), help="Sensor collection rate Hz")
-    sim_p.add_argument("--speed", type=float, default=setting("navigation.base_speed_mps"), help="Base cruising speed (m/s)")
-    sim_p.add_argument("--nominal-side", type=float, default=setting("navigation.nominal_side_mm"), help="Nominal distance to single wall (mm)")
-    sim_p.add_argument("--duration", type=float, default=setting("navigation.duration_sec"), help="Max duration in seconds")
-    sim_p.add_argument("-y", "--yes", action="store_true", help="Auto-confirm all interactive prompts")
 
     # 3. Step-test
     step_p = subparsers.add_parser("step-test", help="Test N grid cell move with PID centering")
@@ -476,22 +398,19 @@ def main():
     step_p.add_argument("--rate", type=float, default=setting("sensors.rate_hz"))
     step_p.add_argument("--speed", type=float, default=setting("navigation.step_test_speed_mps"))
     step_p.add_argument("--nominal-side", type=float, default=setting("navigation.nominal_side_mm"))
-    step_p.add_argument("--mock", action="store_true")
 
     # 4. Turn-test
-    turn_p = subparsers.add_parser("turn-test", help="Test in-place turn (+90 right, -90 left, 180 around)")
-    turn_p.add_argument("--direction", choices=("left", "right", "around"), default="right", help="Turn direction: left (z=-90), right (z=+90), around (z=180)")
+    turn_p = subparsers.add_parser("turn-test", help="Test in-place turn (+90 left, -90 right, 180 around)")
+    turn_p.add_argument("--direction", choices=("left", "right", "around"), default="right", help="Turn direction: left (z=+90), right (z=-90), around (z=180)")
     turn_p.add_argument("--conn-type", choices=("ap", "sta"), default=setting("robot.conn_type"))
     turn_p.add_argument("--calibration", default=project_path("paths.calibration"))
     turn_p.add_argument("--rate", type=float, default=setting("sensors.rate_hz"))
-    turn_p.add_argument("--mock", action="store_true")
 
     # 5. Monitor
     mon_p = subparsers.add_parser("monitor", help="Live stream sensor telemetry (Thread 1)")
     mon_p.add_argument("--conn-type", choices=("ap", "sta"), default=setting("robot.conn_type"))
     mon_p.add_argument("--calibration", default=project_path("paths.calibration"))
     mon_p.add_argument("--rate", type=float, default=setting("sensors.rate_hz"))
-    mon_p.add_argument("--mock", action="store_true", help="Monitor mock data")
 
     # 6. Analyze
     ana_p = subparsers.add_parser("analyze", help="Analyze telemetry log and generate graphs")
@@ -525,17 +444,13 @@ def main():
             return 0
     args = parser.parse_args(cli_arguments)
     args.interactive_menu = interactive_menu
-    if args.command in ("run", "simulate") and not parse_custom_commands(args.commands):
+    if args.command == "run" and not parse_custom_commands(args.commands):
         parser.error("--commands must contain at least one motion test command")
 
     if args.command == "explore":
         return cmd_explore(args)
     elif args.command == "gimbal-test":
         return cmd_gimbal_test(args)
-    elif args.command == "evaluate-map":
-        return cmd_evaluate_map(args)
-    elif args.command == "simulate":
-        return cmd_simulate(args)
     elif args.command == "run":
         return cmd_run(args)
     elif args.command == "step-test":

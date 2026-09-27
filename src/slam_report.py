@@ -1,13 +1,8 @@
-"""Post-run map/trajectory rendering and offline ground-truth evaluation.
-
-Ground truth is used only by this evaluator, never by the exploration backend.
-"""
-import csv
+"""Post-run map, trajectory and action reports."""
 import json
-import shutil
 from html import escape
 from pathlib import Path
-from .grid_slam import GridMap, NAMES
+from .grid_slam import NAMES
 
 
 def action_steps(data):
@@ -129,22 +124,6 @@ document.getElementById('search').addEventListener('input',e=>{let q=e.target.va
     return Path(output)
 
 
-def save_run_report(map_file, run_dir, basename):
-    folder = Path(run_dir)
-    folder.mkdir(parents=True, exist_ok=True)
-    archive = folder / (basename + '_map.json')
-    if Path(map_file).resolve() != archive.resolve():
-        shutil.copyfile(str(map_file), str(archive))
-    plot, log = save_report(archive)
-    final_plot = folder / 'map.png'
-    plot.replace(final_plot)
-    path_actions = archive.with_name(archive.stem + '_actions.html')
-    path_actions.replace(folder / 'actions.html')
-    final_log = folder / 'events.csv'
-    log.replace(final_log)
-    return archive, final_plot, final_log
-
-
 def save_report(map_file):
     import matplotlib
     matplotlib.use('Agg')
@@ -205,46 +184,8 @@ def save_report(map_file):
     axis.grid(which='major', color='#b6c5d0', linewidth=0.7, alpha=0.65)
 
     figure.tight_layout()
-    save_actions_html(data, path.with_name(path.stem + '_actions.html'))
-    plot = path.with_name(path.stem + '_map.png')
+    actions = save_actions_html(data, path.parent / 'actions.html')
+    plot = path.parent / 'map.png'
     figure.savefig(str(plot), dpi=160)
     plt.close(figure)
-    log = path.with_name(path.stem + '_events.csv')
-    with log.open('w', newline='', encoding='utf-8') as stream:
-        writer = csv.writer(stream)
-        writer.writerow(['event_index', 'timestamp', 'type', 'details_json'])
-        for index, event in enumerate(data['events']):
-            writer.writerow([index, event['timestamp'], event['type'], json.dumps(event, ensure_ascii=False)])
-    return plot, log
-
-
-def evaluate(map_file, truth_file):
-    """Truth: cells=[{cell:[x,y], walls:{N:bool,E:bool,S:bool,W:bool}}].
-
-A cell is correct only if all four walls are known and match. Unvisited/unknown
-cells count as incorrect; denominators include every ground-truth cell.
-"""
-    data = json.loads(Path(map_file).read_text(encoding='utf-8'))
-    truth = json.loads(Path(truth_file).read_text(encoding='utf-8'))
-    grid = GridMap()
-    for edge in data['edges']:
-        grid.edges[tuple(sorted(tuple(c) for c in edge['cells']))] = edge['wall']
-    visited = {tuple(c) for c in data['visited']}
-    cells = {}
-    for item in truth['cells']:
-        cell = tuple(item['cell'])
-        if len(cell) != 2 or any(type(v) is not int for v in cell) or cell in cells:
-            raise ValueError('Ground truth cells must be unique integer coordinates')
-        walls = item['walls']
-        if set(walls) != set(NAMES) or any(type(v) is not bool for v in walls.values()):
-            raise ValueError('Each truth cell must have N/E/S/W boolean walls')
-        cells[cell] = walls
-    if not cells:
-        raise ValueError('Ground truth must contain at least one cell')
-    correct = sum(cell in visited and all(grid.wall(cell, d) == walls[name] for d, name in enumerate(NAMES))
-                  for cell, walls in cells.items())
-    covered = len(visited.intersection(cells))
-    return {'total_cells': len(cells), 'correct_cells': correct, 'covered_cells': covered,
-            'map_accuracy_percent': correct / len(cells) * 100,
-            'coverage_percent': covered / len(cells) * 100,
-            'unexpected_cells': [list(c) for c in sorted(visited.difference(cells))]}
+    return plot, actions

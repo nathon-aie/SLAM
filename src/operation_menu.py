@@ -17,10 +17,6 @@ def choose(title, options):
         print('กรุณาเลือกหมายเลข 0–{}'.format(len(options)))
 
 
-def mode():
-    return choose('เลือกการทำงาน', [('หุ่นจริง', False), ('จำลอง', True)])
-
-
 def calibration_action():
     return choose('Calibration', [
         ('เก็บตัวอย่าง Sharp ซ้ายจากหุ่นจริง', 'sharp_left'),
@@ -48,17 +44,12 @@ def select_operation():
         if task == 'gimbal-test':
             return [task]
         if task in ('explore', 'step-test', 'turn-test', 'monitor', 'motion'):
-            mock = mode()
-            if mock is None:
-                return None
             if task == 'motion':
                 commands = input('คำสั่งเคลื่อนที่ เช่น fwd 1, right, fwd 1 (เว้นว่างเพื่อยกเลิก): ').strip()
                 if not commands:
                     return None
-                return ['simulate' if mock else 'run', '--commands', commands, '-y']
+                return ['run', '--commands', commands, '-y']
             arguments = [task]
-            if mock:
-                arguments.append('--mock')
             if task == 'turn-test':
                 direction = choose('เลือกการเลี้ยว', [
                     ('ขวา 90 องศา', 'right'), ('ซ้าย 90 องศา', 'left'), ('กลับหลัง 180 องศา', 'around')])
@@ -73,20 +64,6 @@ def select_operation():
             if action == 'fit':
                 return ['calibrate', 'fit', project_path('paths.measurements')]
             return ['calibrate', 'collect-live', action]
-        action = choose('วิเคราะห์ผล', [
-            ('วิเคราะห์ Log เซนเซอร์', 'analyze'),
-            ('วัด Map Accuracy / Coverage เทียบ Ground Truth', 'evaluate-map'),
-        ])
-        if action is None:
-            return None
-        if action == 'evaluate-map':
-            map_file = project_path('slam.output')
-            truth = project_path('paths.ground_truth')
-            for file in (map_file, truth):
-                if not Path(file).is_file():
-                    print('ยังไม่มีไฟล์สำหรับประเมิน: {}'.format(file))
-                    return None
-            return ['evaluate-map', map_file, truth]
         base = Path(project_path('paths.telemetry'))
         runs = [p for p in base.glob('run*') if p.is_dir() and any(p.glob('*.json'))]
         runs += list(base.glob('*.json'))

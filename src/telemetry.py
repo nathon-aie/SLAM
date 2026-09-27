@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Telemetry recorder and post-run analysis tools for RoboMaster EP.
 
-Records time-series sensor data from Thread 1, exports clean CSV/JSON runs,
+Records time-series sensor data from Thread 1, exports JSON runs,
 and generates statistical reports & matplotlib analysis charts.
 """
 
@@ -10,7 +10,6 @@ try:
 except ImportError:
     from settings import get as setting, project_path
 
-import csv
 import json
 import math
 import os
@@ -84,8 +83,8 @@ class TelemetryRecorder:
         with self._lock:
             return list(self._records)
 
-    def export(self, custom_name: Optional[str] = None) -> Tuple[Path, Path]:
-        """Saves current session data to timestamped JSON and CSV inside the sequential run directory."""
+    def export(self, custom_name: Optional[str] = None) -> Path:
+        """Save sensor records once, as JSON inside the run directory."""
         with self._lock:
             records = list(self._records)
 
@@ -93,7 +92,6 @@ class TelemetryRecorder:
         base_filename = custom_name if custom_name else self.run_name
         name = f"{base_filename}_{self.timestamp_str}"
         json_path = self.run_dir / f"{name}.json"
-        csv_path = self.run_dir / f"{name}.csv"
 
         # Export JSON
         summary = {
@@ -107,16 +105,8 @@ class TelemetryRecorder:
         with json_path.open("w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False)
 
-        # Export CSV
-        if records:
-            fieldnames = list(records[0].keys())
-            with csv_path.open("w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(records)
-
-        print(f"[TelemetryRecorder] Saved {len(records)} samples -> {json_path} & {csv_path}")
-        return json_path, csv_path
+        print(f"[TelemetryRecorder] Saved {len(records)} samples -> {json_path}")
+        return json_path
 
 
 class TelemetryAnalyzer:

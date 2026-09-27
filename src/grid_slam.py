@@ -203,7 +203,7 @@ and correct the continuous pose; this is not unrestricted metric pose-graph SLAM
 
 
 class DFSExplorer:
-    """Backend scans/moves; this layer has no access to simulation ground truth."""
+    """DFS exploration through the live scan/move backend."""
     def __init__(self, backend, output):
         self.backend = backend
         self.output = output

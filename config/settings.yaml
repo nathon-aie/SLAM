@@ -11,7 +11,6 @@ paths:
   calibration: calibration_output/calibration.json
   telemetry: telemetry_logs
   measurements: data/calibration_measurements.csv
-  ground_truth: data/ground_truth.json
   calibration_output: calibration_output
 
 sensors:
@@ -59,10 +58,6 @@ pid:
 telemetry:
   buffer_capacity: 10000
 
-simulation:
-  speed_multiplier: 2
-  step_pause_sec: 0.05
-
 system:
   sensor_warmup_sec: 0.3
   step_test_timeout_sec: 30
@@ -95,14 +90,13 @@ gimbal:
 # ขนาดและจุดเริ่มไม่กำหนดว่ามีกำแพงที่ใด กำแพงยังต้องสำรวจจาก ToF
 
 map:
-  rows: 4
-  columns: 3
+  rows: 3
+  columns: 4
   start:
     x: 0
     y: 0
 
 slam:
-  output: data/explored_map.json
   wall_thickness_m: 0.075
   wall_margin_m: 0.06
   sensor_timeout_sec: 2
@@ -125,7 +119,6 @@ slam:
   max_pose_std_m: 0.22
   # Clockwise global directions from initial forward: N, E, S, W
   direction_order: [0, 1, 2, 3]
-  simulation_seed: 8
 
 # Passive chassis motion check during Gimbal scans; does not rotate the chassis.
 scan_guard:

@@ -18,7 +18,7 @@ from dataclasses import replace
 import math
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, List
 
 try:
     from .pid_controller import WallCenteringPID
@@ -27,65 +27,6 @@ except (ImportError, ValueError):
     from pid_controller import WallCenteringPID
     from sensor_pipeline import RobotSensorSnapshot, SensorHub
 
-
-class MockRobotActuators:
-    """Mock actuators for running simulation or dry-runs without physical EP."""
-
-    def __init__(self, sensor_collector: Optional[Any] = None, speed_mult: float = setting("simulation.speed_multiplier")):
-        self.collector = sensor_collector
-        self.speed_mult = max(0.1, speed_mult)
-        self.cur_x = 0.0
-        self.cur_y = 0.0
-        self.cur_yaw = 0.0
-
-    def move(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, xy_speed: float = 0.5, z_speed: float = 30.0):
-        """Simulates linear movement (x forward/backward, y left/right, z rotation deg)."""
-        duration = max(0.1, ((abs(x) + abs(y)) / max(0.1, xy_speed) + abs(z) / max(1.0, z_speed)) / self.speed_mult)
-        steps = max(2, int(duration * 20))
-        dx = x / steps
-        dy = y / steps
-        yaw_change = 180.0 if abs(z) == 180.0 else -z
-        dz = yaw_change / steps
-
-        step_delay = duration / steps
-        for _ in range(steps):
-            time.sleep(step_delay)
-            self.cur_x += dx
-            self.cur_y += dy
-            self.cur_yaw = (self.cur_yaw + dz + 180.0) % 360.0 - 180.0
-            if self.collector:
-                self.collector.inject_mock_data(
-                    sharp_left_adc=350.0,
-                    sharp_right_adc=350.0,
-                    tof_dist=500.0,
-                    yaw=self.cur_yaw,
-                    pos_x=self.cur_x,
-                    pos_y=self.cur_y,
-                )
-
-    def drive_speed(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, timeout: Optional[float] = None):
-        """Simulates holonomic drive_speed."""
-        dt = timeout if timeout else 0.05
-        # Simulate position shift
-        rad = math.radians(self.cur_yaw)
-        self.cur_x += (x * math.cos(rad) - y * math.sin(rad)) * dt
-        self.cur_y += (x * math.sin(rad) + y * math.cos(rad)) * dt
-        self.cur_yaw = (self.cur_yaw + z * dt + 180.0) % 360.0 - 180.0
-
-        if self.collector:
-            self.collector.inject_mock_data(
-                sharp_left_adc=350.0,
-                sharp_right_adc=350.0,
-                tof_dist=500.0,
-                yaw=self.cur_yaw,
-                pos_x=self.cur_x,
-                pos_y=self.cur_y,
-            )
-        if timeout:
-            time.sleep(timeout / self.speed_mult)
-
-    def stop(self):
-        self.drive_speed(0, 0, 0)
 
 class RobotControllerThread(threading.Thread):
     """Thread 2: Consumes filtered sensor data from Thread 1 (SensorHub) and
@@ -96,7 +37,6 @@ class RobotControllerThread(threading.Thread):
         self,
         sensor_hub: SensorHub,
         robot: Any = None,
-        mock_mode: bool = False,
         grid_size_m: float = setting("navigation.grid_size_m"),
         nominal_side_dist_mm: float = setting("navigation.nominal_side_mm"),
         base_speed: float = setting("navigation.base_speed_mps"),
@@ -104,7 +44,6 @@ class RobotControllerThread(threading.Thread):
         super().__init__(name="RobotControllerThread-2", daemon=True)
         self.sensor_hub = sensor_hub
         self.robot = robot
-        self.mock_mode = mock_mode
         self.grid_size_m = grid_size_m
         self.base_speed = base_speed
         self.target_heading_deg = 0.0
@@ -122,13 +61,12 @@ class RobotControllerThread(threading.Thread):
             tolerance_mm=setting("navigation.tolerance_mm"),  # 2cm tolerance as per REQ
         )
 
-        self.mock_actuator = MockRobotActuators() if mock_mode else None
         self.command_queue: List[str] = []
         self.current_action: str = "IDLE"
         self.current_step: int = 0
         self.commands_completed: bool = False
         self.failure = None
-        self.step_pause_sec: float = setting("simulation.step_pause_sec") if mock_mode else setting("navigation.step_pause_sec")  # 1.0s pause between states on live robot
+        self.step_pause_sec: float = setting("navigation.step_pause_sec")  # 1.0s pause between states on live robot
 
     def set_commands(self, commands: List[str]):
         self.command_queue = list(commands)
@@ -139,33 +77,25 @@ class RobotControllerThread(threading.Thread):
 
     def drive_speed(self, vx: float, vy: float, vz: float):
         """Drives robot chassis with holonomic velocities (m/s, m/s, deg/s)."""
-        if self.mock_mode or self.robot is None:
-            if self.mock_actuator:
-                self.mock_actuator.drive_speed(x=vx, y=vy, z=vz * setting("robot.yaw_speed_command_sign"), timeout=1.0 / setting("navigation.control_rate_hz"))
-        else:
-            try:
-                # RoboMaster EP chassis drive_speed
-                # Note: drive_speed accepts x=vx(m/s), y=vy(m/s), z=vz(deg/s)
-                sent = self.robot.chassis.drive_speed(x=vx, y=vy, z=vz * setting("robot.yaw_speed_command_sign"),
-                                                      timeout=setting("slam.max_sensor_age_sec"))
-                if sent is False and not chassis_speed_has_no_ack(self.robot.chassis):
-                    raise RuntimeError("Chassis rejected drive command")
-                # The SDK speed protocol is PUSH/no ACK: its False result is
-                # not an explicit rejection. Sensor freshness, heading feedback,
-                # front braking and odometry timeout still verify actual motion.
-            except Exception as e:
-                raise RuntimeError("Chassis drive failed: {}".format(e)) from e
+        try:
+            # RoboMaster EP chassis drive_speed
+            # Note: drive_speed accepts x=vx(m/s), y=vy(m/s), z=vz(deg/s)
+            sent = self.robot.chassis.drive_speed(x=vx, y=vy, z=vz * setting("robot.yaw_speed_command_sign"),
+                                                  timeout=setting("slam.max_sensor_age_sec"))
+            if sent is False and not chassis_speed_has_no_ack(self.robot.chassis):
+                raise RuntimeError("Chassis rejected drive command")
+            # The SDK speed protocol is PUSH/no ACK: its False result is
+            # not an explicit rejection. Sensor freshness, heading feedback,
+            # front braking and odometry timeout still verify actual motion.
+        except Exception as e:
+            raise RuntimeError("Chassis drive failed: {}".format(e)) from e
 
     def stop_chassis(self):
         """Stops chassis motors."""
-        if self.mock_mode or self.robot is None:
-            if self.mock_actuator:
-                self.mock_actuator.stop()
-        else:
-            try:
-                self.robot.chassis.drive_speed(x=0, y=0, z=0)
-            except Exception:
-                pass
+        try:
+            self.robot.chassis.drive_speed(x=0, y=0, z=0)
+        except Exception:
+            pass
 
     # -----------------------------------------------------------------------
     # Step 3: Grid-by-Grid Navigation & PID Centering
@@ -364,16 +294,9 @@ class RobotControllerThread(threading.Thread):
         dir_name = "Left (เลี้ยวซ้าย z=+90)" if deg > 0 else ("Right (เลี้ยวขวา z=-90)" if deg < 0 else "Around (กลับหลัง z=180)")
         print(f"\n[Controller] 🔄 Executing Turn {dir_name}: z={deg:+.0f}° -> Target Heading: {self.target_heading_deg:.0f}°...")
 
-        if self.mock_mode or self.robot is None:
-            if self.mock_actuator:
-                self.mock_actuator.move(z=deg, z_speed=speed)
-            else:
-                time.sleep(abs(deg) / max(1.0, speed))
-        else:
-            # Execute turn with SDK chassis.move
-            action = self.robot.chassis.move(x=0, y=0, z=deg, z_speed=speed)
-            if not action.wait_for_completed(timeout=setting("gimbal.action_timeout_sec")) or not action.has_succeeded:
-                raise RuntimeError("Chassis turn failed or timed out")
+        action = self.robot.chassis.move(x=0, y=0, z=deg, z_speed=speed)
+        if not action.wait_for_completed(timeout=setting("gimbal.action_timeout_sec")) or not action.has_succeeded:
+            raise RuntimeError("Chassis turn failed or timed out")
 
         # Stop chassis and reset PID states cleanly
         self.stop_chassis()
@@ -382,7 +305,7 @@ class RobotControllerThread(threading.Thread):
 
         # Snap target heading to nearest 90-deg grid axis of current yaw
         end_state = self.sensor_hub.get_latest_state()
-        if not self.mock_mode and end_state.yaw is not None:
+        if end_state.yaw is not None:
             snapped_target = round(end_state.yaw / 90.0) * 90.0
             self.target_heading_deg = (snapped_target + 180.0) % 360.0 - 180.0
 
@@ -405,8 +328,16 @@ class RobotControllerThread(threading.Thread):
         self.current_action = "EMERGENCY_STOP"
         self.stop_chassis()
 
-    def start_running(self):
+    def enable_motion(self):
+        """Enable synchronous motion/scan actions without starting the queue worker."""
         self._running.set()
+
+    def is_running(self) -> bool:
+        """Whether motion/scan actions are enabled and have not been stopped."""
+        return self._running.is_set()
+
+    def start_running(self):
+        self.enable_motion()
         self.start()
 
     def stop_running(self):

@@ -4,6 +4,53 @@ Some SDK versions compare strings with `is`. YAML/argparse strings must be mappe
 to the SDK's exact constant objects before initialize(), without modifying the SDK.
 """
 
+import sys
+
+
+def load_robot_sdk():
+    """Load RoboMaster SDK while keeping camera media codec optional.
+
+    The DJI SDK imports camera/media from robomaster.robot even when the
+    robot tasks only need sensor and chassis modules.
+    Some Linux installs do not ship libmedia_codec, so provide a small no-op
+    codec module that lets Robot() construct camera/liveview objects. Camera
+    streaming remains unavailable in that environment, but the robot tasks
+    do not use it.
+    """
+    try:
+        from robomaster import robot
+        return robot
+    except ModuleNotFoundError as exc:
+        if exc.name != "libmedia_codec":
+            raise RuntimeError("RoboMaster SDK is not installed correctly: {}".format(exc))
+
+    import types
+
+    class _NoCameraCodec(object):
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def decode(self, *args, **kwargs):
+            return None
+
+        def stop(self, *args, **kwargs):
+            pass
+
+        def display(self, *args, **kwargs):
+            pass
+
+    codec = types.ModuleType("libmedia_codec")
+    codec.H264Decoder = _NoCameraCodec
+    codec.OpusDecoder = _NoCameraCodec
+    codec.AudioDecoder = _NoCameraCodec
+    sys.modules["libmedia_codec"] = codec
+
+    try:
+        from robomaster import robot
+        return robot
+    except ImportError as exc:
+        raise RuntimeError("RoboMaster SDK is not installed correctly: {}".format(exc))
+
 
 def canonical_connection_type(value):
     from robomaster import conn

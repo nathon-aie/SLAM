@@ -10,14 +10,14 @@ Step 2 Requirement:
 
 try:
     from .settings import get as setting, project_path
+    from .sensor_filters import SensorFilterPipeline
 except ImportError:
     from settings import get as setting, project_path
+    from sensor_filters import SensorFilterPipeline
 
 import collections
-import copy
 import json
 import math
-import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -85,118 +85,6 @@ class CalibrationManager:
             return max(30.0, min(400.0, (1000.0 / (raw_value + 10.0)) * 10.0))
 
         return float(raw_value)
-
-
-# ---------------------------------------------------------------------------
-# Filter Implementations
-# ---------------------------------------------------------------------------
-
-class MovingAverageFilter:
-    """Moving average filter over a sliding window."""
-
-    def __init__(self, window_size: int = 5):
-        self.window_size = max(1, window_size)
-        self.buffer = collections.deque(maxlen=self.window_size)
-
-    def update(self, value: float) -> float:
-        self.buffer.append(value)
-        return sum(self.buffer) / len(self.buffer)
-
-    def reset(self):
-        self.buffer.clear()
-
-
-class MedianFilter:
-    """Median filter to reject impulsive sensor noise/spikes."""
-
-    def __init__(self, window_size: int = 5):
-        self.window_size = max(1, window_size)
-        self.buffer = collections.deque(maxlen=self.window_size)
-
-    def update(self, value: float) -> float:
-        self.buffer.append(value)
-        sorted_vals = sorted(self.buffer)
-        n = len(sorted_vals)
-        if n % 2 == 1:
-            return sorted_vals[n // 2]
-        else:
-            return (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2.0
-
-    def reset(self):
-        self.buffer.clear()
-
-
-class ExponentialMovingAverageFilter:
-    """Exponential moving average (EMA / Low-pass filter)."""
-
-    def __init__(self, alpha: float = 0.3):
-        self.alpha = min(1.0, max(0.01, alpha))
-        self.current_value: Optional[float] = None
-
-    def update(self, value: float) -> float:
-        if self.current_value is None:
-            self.current_value = value
-        else:
-            self.current_value = self.alpha * value + (1.0 - self.alpha) * self.current_value
-        return self.current_value
-
-    def reset(self):
-        self.current_value = None
-
-
-class OutlierRejectionFilter:
-    """Rejects out-of-bounds or physically impossible sensor jumps."""
-
-    def __init__(self, min_valid: float, max_valid: float, max_rate_of_change: Optional[float] = None):
-        self.min_valid = min_valid
-        self.max_valid = max_valid
-        self.max_rate_of_change = max_rate_of_change
-        self.last_valid: Optional[float] = None
-
-    def update(self, value: float) -> Tuple[float, bool]:
-        if not (self.min_valid <= value <= self.max_valid):
-            # Out of bounds
-            return (self.last_valid if self.last_valid is not None else value, False)
-
-        if self.max_rate_of_change is not None and self.last_valid is not None:
-            if abs(value - self.last_valid) > self.max_rate_of_change:
-                # Spike detected, reject or limit
-                return (self.last_valid, False)
-
-        self.last_valid = value
-        return (value, True)
-
-    def reset(self):
-        self.last_valid = None
-
-
-class SensorFilterPipeline:
-    """Composite filter pipeline combining Outlier Rejection, Median, and EMA."""
-
-    def __init__(
-        self,
-        min_valid: float = 0.0,
-        max_valid: float = 1023.0,
-        median_window: int = 5,
-        ema_alpha: float = 0.35,
-    ):
-        self.outlier = OutlierRejectionFilter(min_valid=min_valid, max_valid=max_valid)
-        self.median = MedianFilter(window_size=median_window)
-        self.ema = ExponentialMovingAverageFilter(alpha=ema_alpha)
-
-    def filter(self, raw_value: Optional[float]) -> Tuple[Optional[float], bool]:
-        if raw_value is None or not math.isfinite(raw_value):
-            return None, False
-
-        checked_val, is_valid = self.outlier.update(raw_value)
-        median_val = self.median.update(checked_val)
-        filtered_val = self.ema.update(median_val)
-        return filtered_val, is_valid
-
-    def reset(self):
-        self.outlier.reset()
-        self.median.reset()
-        self.ema.reset()
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +279,6 @@ class SensorCollectorThread(threading.Thread):
         calibration_manager: Optional[CalibrationManager] = None,
         telemetry_recorder: Any = None,
         update_rate_hz: float = setting("sensors.rate_hz"),
-        mock_mode: bool = False,
     ):
         super().__init__(name="SensorCollectorThread-1", daemon=True)
         self.sensor_hub = sensor_hub
@@ -399,7 +286,6 @@ class SensorCollectorThread(threading.Thread):
         self.calibration_manager = calibration_manager or CalibrationManager()
         self.telemetry_recorder = telemetry_recorder
         self.update_interval = 1.0 / max(1.0, update_rate_hz)
-        self.mock_mode = mock_mode
 
         self._running = threading.Event()
         self._frame_count = 0
@@ -514,7 +400,7 @@ class SensorCollectorThread(threading.Thread):
 
     def setup_subscriptions(self):
         """Subscribes to RoboMaster SDK telemetry streams."""
-        if self.mock_mode or self.robot is None:
+        if self.robot is None:
             return
 
         try:
@@ -536,7 +422,7 @@ class SensorCollectorThread(threading.Thread):
 
     def unsubscribe_all(self):
         """Unsubscribes from RoboMaster SDK streams on shutdown."""
-        if self.mock_mode or self.robot is None:
+        if self.robot is None:
             return
 
         try:
@@ -558,7 +444,7 @@ class SensorCollectorThread(threading.Thread):
 
     def _poll_adcs_if_needed(self):
         """Direct polling fallback for Sharp sensors if adapter subscription not streaming."""
-        if self.mock_mode or self.robot is None:
+        if self.robot is None:
             return
         if not hasattr(self.robot, "sensor_adaptor"):
             return
@@ -616,8 +502,7 @@ class SensorCollectorThread(threading.Thread):
         while self._running.is_set():
             t_start = time.monotonic()
 
-            if not self.mock_mode:
-                self._poll_adcs_if_needed()
+            self._poll_adcs_if_needed()
 
             # Acquire snapshot of raw data
             with self._raw_lock:
@@ -650,7 +535,7 @@ class SensorCollectorThread(threading.Thread):
 
             # Heading (Yaw) Zeroing: Locks initial robot heading to 0.0 deg
             raw_yaw = att[0] if att and len(att) > 0 else 0.0
-            if raw_yaw is not None and math.isfinite(raw_yaw) and (self.mock_mode or att_time > 0):
+            if raw_yaw is not None and math.isfinite(raw_yaw) and att_time > 0:
                 if self._initial_yaw_offset is None:
                     self._initial_yaw_offset = raw_yaw
                     print(f"[Thread 1 Sensor] Auto-Locked Initial Heading: {self._initial_yaw_offset:.2f}° -> 0.0°")
@@ -661,28 +546,24 @@ class SensorCollectorThread(threading.Thread):
             # Position (0, 0) Zeroing: Locks initial robot position to (0, 0)
             raw_x = pos[0] if pos and len(pos) > 0 else 0.0
             raw_y = pos[1] if pos and len(pos) > 1 else 0.0
-            if not self.mock_mode and (pos_time <= 0 or att_time <= 0):
+            if pos_time <= 0 or att_time <= 0:
                 time.sleep(self.update_interval)
                 continue
-            if self.mock_mode:
-                local_x = raw_x
-                local_y = raw_y
-            else:
-                if self._initial_pos_offset is None:
-                    self._initial_pos_offset = (raw_x, raw_y)
-                    print(f"[Thread 1 Sensor] Auto-Locked Initial Position: ({raw_x:.3f}, {raw_y:.3f}) -> (0.000, 0.000)")
+            if self._initial_pos_offset is None:
+                self._initial_pos_offset = (raw_x, raw_y)
+                print(f"[Thread 1 Sensor] Auto-Locked Initial Position: ({raw_x:.3f}, {raw_y:.3f}) -> (0.000, 0.000)")
 
-                dx_raw = raw_x - self._initial_pos_offset[0]
-                dy_raw = raw_y - self._initial_pos_offset[1]
-                # Rotate world odometry into robot's initial baseline frame (where forward = +X)
-                theta0_rad = math.radians(self._initial_yaw_offset if self._initial_yaw_offset is not None else 0.0)
-                local_x = dx_raw * math.cos(theta0_rad) + dy_raw * math.sin(theta0_rad)
-                local_y = -dx_raw * math.sin(theta0_rad) + dy_raw * math.cos(theta0_rad)
+            dx_raw = raw_x - self._initial_pos_offset[0]
+            dy_raw = raw_y - self._initial_pos_offset[1]
+            # Rotate world odometry into robot's initial baseline frame (where forward = +X)
+            theta0_rad = math.radians(self._initial_yaw_offset if self._initial_yaw_offset is not None else 0.0)
+            local_x = dx_raw * math.cos(theta0_rad) + dy_raw * math.sin(theta0_rad)
+            local_y = -dx_raw * math.sin(theta0_rad) + dy_raw * math.cos(theta0_rad)
 
             # Filtering raw signals
             filt_sl, sl_valid = self.sharp_left_filter.filter(raw_sl)
             filt_sr, sr_valid = self.sharp_right_filter.filter(raw_sr)
-            if self.mock_mode or (tof_time > filter_after and tof_time != self._last_tof_packet):
+            if tof_time > filter_after and tof_time != self._last_tof_packet:
                 self._last_tof_filtered = self.tof_filter.filter(raw_tof)
                 self._last_tof_packet = tof_time
             filt_tof, tof_valid = self._last_tof_filtered
@@ -777,23 +658,3 @@ class SensorCollectorThread(threading.Thread):
             sleep_time = self.update_interval - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
-
-    # Simulation helper to inject synthetic sensor values
-    def inject_mock_data(
-        self,
-        sharp_left_adc: Optional[float] = None,
-        sharp_right_adc: Optional[float] = None,
-        tof_dist: Optional[float] = None,
-        yaw: float = 0.0,
-        pos_x: float = 0.0,
-        pos_y: float = 0.0,
-    ):
-        with self._raw_lock:
-            if sharp_left_adc is not None:
-                self._raw_sharp_left = sharp_left_adc
-            if sharp_right_adc is not None:
-                self._raw_sharp_right = sharp_right_adc
-            if tof_dist is not None:
-                self._raw_tof = tof_dist
-            self._raw_attitude = (yaw, self._raw_attitude[1], self._raw_attitude[2])
-            self._raw_position = (pos_x, pos_y, self._raw_position[2])

@@ -4,9 +4,8 @@
 CSV input columns:
     sensor,raw_value,reference_mm[,sample_id]
 
-Run ``python main.py calibrate init-csv`` to create a template.  The fitting
-command intentionally works offline, so measurements can be collected by
-hand and verified before connecting to the robot.
+Select Calibration from ``python main.py``. Fitting works offline using
+measurements already collected from the robot.
 """
 
 try:
@@ -16,11 +15,9 @@ except ImportError:
     from settings import get as setting, project_path
     from sdk_connection import initialize_robot, load_robot_sdk
 
-import argparse
 import csv
 import json
 import math
-import sys
 import time
 from pathlib import Path
 
@@ -98,16 +95,6 @@ def plot_sensor(sensor, rows, fit, output):
     plt.tight_layout()
     plt.savefig(output, dpi=160)
     plt.close()
-
-
-def init_csv(path):
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.writer(stream)
-        writer.writerow(("sensor", "raw_value", "reference_mm", "sample_id"))
-        writer.writerow(("sharp_left", "", "", "1"))
-    print("created {}".format(target))
 
 
 def append_measurement(path, sensor, raw_value, reference_mm, sample_id):
@@ -248,37 +235,3 @@ def fit_command(input_path, output_dir):
     print("wrote {}".format(result))
     for sensor, fit in calibration["sensors"].items():
         print("{}: {} samples, RMSE {:.2f} mm, R² {:.4f}".format(sensor, fit["samples"], fit["rmse_mm"], fit["r2"]))
-
-
-def main():
-    parser = argparse.ArgumentParser(description="RoboMaster EP Step 1 calibration")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    init_parser = subparsers.add_parser("init-csv", help="create a measurement CSV template")
-    init_parser.add_argument("path", nargs="?", default=project_path("paths.measurements"))
-    live_parser = subparsers.add_parser("collect-live", help="collect Sharp/ToF values from a connected EP")
-    live_parser.add_argument("sensor", choices=("sharp_left", "sharp_right", "tof"))
-    live_parser.add_argument("--output", default=project_path("paths.measurements"))
-    live_parser.add_argument("--board-id", type=int, help="sensor-adapter board ID; defaults to 1/2 from REQ")
-    live_parser.add_argument("--port", type=int, help="sensor-adapter port; defaults to 1/2 from REQ")
-    live_parser.add_argument("--tof-index", type=int, default=setting("sensors.tof_index"), help="ToF array index, 0-based")
-    live_parser.add_argument("--samples", type=int, default=setting("calibration.samples"))
-    live_parser.add_argument("--conn-type", choices=("ap", "sta"), default=setting("robot.conn_type"))
-    fit_parser = subparsers.add_parser("fit", help="fit calibration curves and save plots")
-    fit_parser.add_argument("input", help="measurement CSV")
-    fit_parser.add_argument("--output-dir", default=project_path("paths.calibration_output"))
-    args = parser.parse_args()
-    try:
-        if args.command == "init-csv":
-            init_csv(args.path)
-        elif args.command == "collect-live":
-            collect_live(args.sensor, args.output, args.board_id, args.port, args.tof_index, args.samples, args.conn_type)
-        else:
-            fit_command(args.input, args.output_dir)
-    except (OSError, RuntimeError, ValueError) as exc:
-        print("error: {}".format(exc), file=sys.stderr)
-        return 2
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

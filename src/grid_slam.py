@@ -1,6 +1,6 @@
 """Incremental grid wall mapping, range/odometry localization, and DFS exploration.
 
-Cell coordinates: x indexes rows along initial forward, y columns to the right.
+Cell coordinates: (row, column); rows along initial forward, columns to the right.
 No environment map is supplied to the explorer. Unknown edges are never traversed.
 """
 import json
@@ -14,8 +14,8 @@ NAMES = ('N', 'E', 'S', 'W')
 
 
 def neighbor(cell, direction):
-    dx, dy = DIRECTIONS[direction]
-    return cell[0] + dx, cell[1] + dy
+    drow, dcolumn = DIRECTIONS[direction]
+    return cell[0] + drow, cell[1] + dcolumn
 
 
 def wrap(deg):
@@ -45,15 +45,15 @@ class GridMap:
     def expected_range(self, cell, direction, pose, sensor_offset):
         """Range to the first mapped wall; stop at unknown edge rather than inventing it."""
         current = cell
-        dx, dy = DIRECTIONS[direction]
+        drow, dcolumn = DIRECTIONS[direction]
         size = setting('navigation.grid_size_m')
         for _ in range(int(setting('sensors.tof_filter.max_valid') / (size * 1000)) + 2):
             wall = self.wall(current, direction)
             if wall is None:
                 return None
             if wall:
-                axis = 0 if dx else 1
-                sign = dx or dy
+                axis = 0 if drow else 1
+                sign = drow or dcolumn
                 boundary = (current[axis] + sign * 0.5) * size
                 inner_face = boundary - sign * setting('slam.wall_thickness_m') / 2
                 return sign * (inner_face - pose[axis] - sensor_offset[axis])
@@ -80,16 +80,17 @@ and correct the continuous pose; this is not unrestricted metric pose-graph SLAM
         self.events = []
 
     def contains(self, cell):
-        return 0 <= cell[0] < self.rows and 0 <= cell[1] < self.columns
+        row, column = cell
+        return 0 <= row < self.rows and 0 <= column < self.columns
 
     def offset(self, heading, direction):
         angle = math.radians(heading * 90)
-        x = setting('gimbal.pivot_x_m')
-        y = setting('gimbal.pivot_y_m')
+        pivot_x_m = setting('gimbal.pivot_x_m')
+        pivot_y_m = setting('gimbal.pivot_y_m')
         beam = setting('gimbal.beam_offset_m')
-        dx, dy = DIRECTIONS[direction]
-        return (x * math.cos(angle) - y * math.sin(angle) + beam * dx,
-                x * math.sin(angle) + y * math.cos(angle) + beam * dy)
+        drow, dcolumn = DIRECTIONS[direction]
+        return (pivot_x_m * math.cos(angle) - pivot_y_m * math.sin(angle) + beam * drow,
+                pivot_x_m * math.sin(angle) + pivot_y_m * math.cos(angle) + beam * dcolumn)
 
     def predict(self, target, displacement, yaw):
         if not self.contains(target):
@@ -134,8 +135,8 @@ and correct the continuous pose; this is not unrestricted metric pose-graph SLAM
                 self.events.append({'timestamp': time.time(), 'type': 'range_mismatch',
                                     'direction': NAMES[d], 'residual_m': residual})
                 continue
-            dx, dy = DIRECTIONS[d]
-            axis, sign = (0, dx) if dx else (1, dy)
+            drow, dcolumn = DIRECTIONS[d]
+            axis, sign = (0, drow) if drow else (1, dcolumn)
             corrections[axis].append(-sign * residual)
         for axis in (0, 1):
             if corrections[axis]:
@@ -150,8 +151,8 @@ and correct the continuous pose; this is not unrestricted metric pose-graph SLAM
         size = setting('navigation.grid_size_m')
         observations = []
         for d, distance in ranges.items():
-            dx, dy = DIRECTIONS[d]
-            axis, sign = (0, dx) if dx else (1, dy)
+            drow, dcolumn = DIRECTIONS[d]
+            axis, sign = (0, drow) if drow else (1, dcolumn)
             offset = self.offset(scan_headings[d], d)
             boundary = (self.cell[axis] + sign * 0.5) * size
             expected = sign * (boundary - self.pose[axis] - offset[axis]) - setting('slam.wall_thickness_m') / 2
@@ -187,7 +188,8 @@ and correct the continuous pose; this is not unrestricted metric pose-graph SLAM
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {'schema': 1, 'method': 'grid_constrained_range_odometry_slam_dfs',
                 'status': status, 'error': error, 'cell_size_m': setting('navigation.grid_size_m'),
-                'coordinates': '+x initial forward, +y right; yaw clockwise degrees',
+                'coordinates': 'pose in metres: +x initial forward, +y right; yaw clockwise degrees',
+                'cell_coordinates': '[row, column]; row increases forward, column increases right',
                 'map_info': {'rows': self.rows, 'columns': self.columns},
                 'start_cell': list(self.start_cell), 'start_pose': self.start_pose,
                 'cell': list(self.cell), 'pose': self.pose, 'variance_m2': self.variance,

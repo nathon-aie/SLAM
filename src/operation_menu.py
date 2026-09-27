@@ -27,7 +27,7 @@ def calibration_action():
 
 
 def select_operation():
-    """Return ordinary CLI arguments for the selected task, or None on cancellation."""
+    """Return (task, function parameters), or None on cancellation."""
     try:
         task = choose('RoboMaster EP — เลือกงาน (ค่าพื้นฐานอ่านจาก config/settings.yaml)', [
             ('สำรวจและสร้างแผนที่ SLAM + DFS', 'explore'),
@@ -42,28 +42,26 @@ def select_operation():
         if task is None:
             return None
         if task == 'gimbal-test':
-            return [task]
+            return task, {}
         if task in ('explore', 'step-test', 'turn-test', 'monitor', 'motion'):
             if task == 'motion':
                 commands = input('คำสั่งเคลื่อนที่ เช่น fwd 1, right, fwd 1 (เว้นว่างเพื่อยกเลิก): ').strip()
                 if not commands:
                     return None
-                return ['run', '--commands', commands, '-y']
-            arguments = [task]
+                return task, {'commands': commands}
+            parameters = {}
             if task == 'turn-test':
                 direction = choose('เลือกการเลี้ยว', [
                     ('ขวา 90 องศา', 'right'), ('ซ้าย 90 องศา', 'left'), ('กลับหลัง 180 องศา', 'around')])
                 if direction is None:
                     return None
-                arguments += ['--direction', direction]
-            return arguments
+                parameters['direction'] = direction
+            return task, parameters
         if task == 'calibrate':
             action = calibration_action()
             if action is None:
                 return None
-            if action == 'fit':
-                return ['calibrate', 'fit', project_path('paths.measurements')]
-            return ['calibrate', 'collect-live', action]
+            return task, {'action': action}
         base = Path(project_path('paths.telemetry'))
         runs = [p for p in base.glob('run*') if p.is_dir() and any(p.glob('*.json'))]
         runs += list(base.glob('*.json'))
@@ -72,7 +70,7 @@ def select_operation():
             print('ยังไม่มี Log สำหรับวิเคราะห์ใน {}'.format(base))
             return None
         selected = choose('เลือก Log ที่ต้องการวิเคราะห์', [(p.name, str(p)) for p in runs])
-        return ['analyze', selected] if selected else None
+        return (task, {'file': selected}) if selected else None
     except (EOFError, KeyboardInterrupt):
         print('\nออกจากเมนู')
         return None

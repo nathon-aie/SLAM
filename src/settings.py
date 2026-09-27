@@ -89,14 +89,14 @@ for key in ("sensors.history_capacity", "telemetry.buffer_capacity", "sensors.to
 
 
 def map_geometry():
-    """Return validated dimensions and start cell in the existing x-row/y-column frame."""
+    """Return validated dimensions and start cell as (row, column)."""
     rows, columns = get("map.rows"), get("map.columns")
-    x, y = get("map.start.x"), get("map.start.y")
+    row, column = get("map.start.row"), get("map.start.column")
     if type(rows) is not int or rows < 1 or type(columns) is not int or columns < 1:
         raise ValueError("map.rows and map.columns must be positive integers")
-    if type(x) is not int or type(y) is not int or not (0 <= x < rows and 0 <= y < columns):
-        raise ValueError("map.start.x/y must be integer cell coordinates inside the map")
-    return rows, columns, (x, y)
+    if type(row) is not int or type(column) is not int or not (0 <= row < rows and 0 <= column < columns):
+        raise ValueError("map.start.row/column must be integer cell coordinates inside the map")
+    return rows, columns, (row, column)
 
 
 map_geometry()  # Validate before connecting to hardware.

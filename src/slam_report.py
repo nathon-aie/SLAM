@@ -1,5 +1,6 @@
 """Post-run map, trajectory and action reports."""
 import json
+import math
 from html import escape
 from pathlib import Path
 from .grid_slam import NAMES
@@ -109,7 +110,7 @@ li{padding:6px;border-top:1px solid #eef1f4;overflow-wrap:anywhere}a{color:#126f
 </style><main><h1>รายการ Step / Action</h1><p class="meta">HEADER</p>
 <p>เลขบนการ์ดตรงกับเลข Step บน map · แต่ละการ์ดสรุปการเดินหนึ่งครั้ง
 รายละเอียดเซนเซอร์พับไว้ด้านล่าง เพื่อให้อ่านเส้นทางได้เร็ว
-พิกัด (x,y) คือแถวและคอลัมน์ของช่อง · <a href="map.png">เปิดแผนที่</a></p>
+พิกัด (row, column) คือ (แถว, คอลัมน์) · row เพิ่มขึ้นด้านบน และ column เพิ่มไปทางขวา · <a href="map.png">เปิดแผนที่</a></p>
 <p class="meta">TURN (planned/inferred) คือคำสั่งที่วางแผนหรืออนุมานจาก log เก่า
 ARRIVED คือยืนยันถึงช่องแล้ว; FAILED คือคำสั่งไม่สำเร็จ</p>
 <nav><input id="search" type="search" placeholder="ค้นหา step, พิกัด หรือ action" aria-label="ค้นหา">
@@ -130,28 +131,35 @@ def save_report(map_file):
     import matplotlib.pyplot as plt
     path = Path(map_file)
     data = json.loads(path.read_text(encoding='utf-8'))
+    telemetry_file = path.with_name((path.stem[:-4] if path.stem.endswith('_map') else path.stem) + '.json')
+    duration_label = 'Elapsed: unavailable'
+    if telemetry_file.is_file():
+        duration = json.loads(telemetry_file.read_text(encoding='utf-8')).get('duration_sec')
+        if isinstance(duration, (int, float)) and math.isfinite(duration) and duration >= 0:
+            minutes, seconds = divmod(round(duration), 60)
+            duration_label = 'Elapsed: {:.2f} min ({} min {:02d} s)'.format(duration / 60, minutes, seconds)
     size = data['cell_size_m']
     steps = action_steps(data)
     figure, axis = plt.subplots(figsize=(9, 9))
-    for x, y in data['visited']:
-        axis.add_patch(plt.Rectangle(((y - 0.5) * size, (x - 0.5) * size), size, size,
+    for row, column in data['visited']:
+        axis.add_patch(plt.Rectangle(((column - 0.5) * size, (row - 0.5) * size), size, size,
                                      facecolor='#e4f1f8', edgecolor='#b6c5d0', linewidth=0.5))
     for edge in data['edges']:
         if not edge['wall']:
             continue
-        (x1, y1), (x2, y2) = edge['cells']
-        x, y = (x1 + x2) * size / 2, (y1 + y2) * size / 2
-        if x1 != x2:
-            axis.plot([y - size / 2, y + size / 2], [x, x], color='#263747', linewidth=3)
+        (row1, column1), (row2, column2) = edge['cells']
+        row, column = (row1 + row2) * size / 2, (column1 + column2) * size / 2
+        if row1 != row2:
+            axis.plot([column - size / 2, column + size / 2], [row, row], color='#263747', linewidth=3)
         else:
-            axis.plot([y, y], [x - size / 2, x + size / 2], color='#263747', linewidth=3)
+            axis.plot([column, column], [row - size / 2, row + size / 2], color='#263747', linewidth=3)
     trajectory = data['trajectory']
     if trajectory:
         axis.plot([p['pose'][1] for p in trajectory], [p['pose'][0] for p in trajectory],
                   'o-', color='#1689c1', markersize=3, linewidth=1, label='Estimated trajectory')
     start = data.get('start_pose', [0, 0, 0])
     axis.scatter([start[1]], [start[0]], marker='s', color='#26a269', s=90,
-                 label='Start {}'.format(tuple(data.get('start_cell', [0, 0]))), zorder=5)
+                 label='Start (row, column) {}'.format(tuple(data.get('start_cell', [0, 0]))), zorder=5)
     axis.scatter([data['pose'][1]], [data['pose'][0]], marker='x', color='#e33b35', s=90,
                  label='Last estimated pose', zorder=6)
     if 'map_info' in data:
@@ -160,27 +168,47 @@ def save_report(map_file):
         # Plot grid lines at cell boundaries, matching wall coordinates.
         axis.set_xticks([(i - 0.5) * size for i in range(data['map_info']['columns'] + 1)])
         axis.set_yticks([(i - 0.5) * size for i in range(data['map_info']['rows'] + 1)])
+        # Major ticks keep the boundary grid; minor ticks label cell indices.
+        axis.set_xticklabels([])
+        axis.set_yticklabels([])
+        axis.set_xticks([column * size for column in range(data['map_info']['columns'])], minor=True)
+        axis.set_yticks([row * size for row in range(data['map_info']['rows'])], minor=True)
+        axis.set_xticklabels([str(column) for column in range(data['map_info']['columns'])], minor=True)
+        axis.set_yticklabels([str(row) for row in range(data['map_info']['rows'])], minor=True)
+        axis.tick_params(which='minor', length=0)
         axis.set_axisbelow(True)
+    # Cell coordinates are indices (row, column), separate from metre axes.
+    if 'map_info' in data:
+        cells = ((row, column) for row in range(data['map_info']['rows'])
+                 for column in range(data['map_info']['columns']))
+    else:
+        cells = (tuple(cell) for cell in data['visited'])
+    for row, column in cells:
+        axis.text((column - 0.40) * size, (row - 0.40) * size, '({},{})'.format(row, column),
+                  ha='left', va='bottom', fontsize=10, color='#4b5563', zorder=9,
+                  bbox=dict(boxstyle='round,pad=0.15', facecolor='white',
+                            edgecolor='none', alpha=0.85))
     labels = {}
     for step in steps:
         if not step['completed']:
             continue
         labels.setdefault(tuple(step['to']), []).append(str(step['step']))
-    for (x, y), numbers in labels.items():
+    for (row, column), numbers in labels.items():
         # One clear badge per step, stacked within its cell. Offset from the
         # estimated route and start/end markers rather than printing over them.
         spacing = min(0.19, 0.6 / max(1, len(numbers))) * size
         for index, number in enumerate(numbers):
             vertical = ((len(numbers) - 1) / 2 - index) * spacing
-            axis.text((y + 0.18) * size, x * size + vertical, number,
+            axis.text((column + 0.18) * size, row * size + vertical, number,
                       ha='center', va='center', fontsize=13, color='#124c72', weight='bold',
                       zorder=10, bbox=dict(boxstyle='round,pad=0.22', facecolor='white',
                                           edgecolor='#87b4d0', linewidth=1))
     axis.set_aspect('equal')
-    axis.set_xlabel('Initial right axis y (m)')
-    axis.set_ylabel('Initial forward axis x (m)')
-    axis.set_title('Explored map | {} | {} cells\nNumbered badges = movement steps (top to bottom)'.format(data['status'], len(data['visited'])))
-    axis.legend(loc='best')
+    axis.set_xlabel('Column - increases right')
+    axis.set_ylabel('Row - increases upward')
+    axis.set_title('Explored map | {} | {} cells\n{}\nCell coordinates = (row, column) | Numbered badges = movement steps (top to bottom)'.format(
+        data['status'], len(data['visited']), duration_label))
+    axis.legend(loc='upper center', bbox_to_anchor=(0.5, -0.13), ncol=3, fontsize=9)
     axis.grid(which='major', color='#b6c5d0', linewidth=0.7, alpha=0.65)
 
     figure.tight_layout()

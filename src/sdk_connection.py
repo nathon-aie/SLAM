@@ -1,6 +1,6 @@
 """Project-side compatibility for RoboMaster SDK connection type identity checks.
 
-Some SDK versions compare strings with `is`. YAML/argparse strings must be mapped
+Some SDK versions compare strings with `is`. YAML strings must be mapped
 to the SDK's exact constant objects before initialize(), without modifying the SDK.
 """
 

@@ -266,6 +266,7 @@ class HardwareBackend:
         ranges = {}
         self.scan_headings = {}
         completed = False
+        front_after = None
         self.event_log.append({'timestamp': time.time(), 'type': 'scan_mode', 'mode': mode})
         try:
             if mode == 'chassis':
@@ -281,16 +282,19 @@ class HardwareBackend:
                 # rotation commands or mode switches are issued during this scan.
                 if not getattr(self, 'gimbal_reference_ready', False):
                     self.initialize_gimbal_reference()
-                else:
-                    self.recenter_gimbal()
+                # The motion hold uses absolute moveto(0), and each sweep
+                # returns to front. Recenter is needed only for the first
+                # reference, not at every new cell.
                 # Initial sweep: left -> rear -> directly right, without revisiting left.
                 directions = ((0, 0), (3, -90), (2, -180), (1, 90)) if scan_rear else ((0, 0), (3, -90), (1, 90))
                 for relative, yaw in directions:
                     direction = (start_heading + relative) % 4
                     ranges[direction] = self.sample(yaw, self.aim(yaw, direct=(yaw == 90)))
                     self.scan_headings[direction] = start_heading
-                self.recenter_gimbal()
-            self.sample(0, self.aim(0))
+                # Return from right to front with one relative move. The next
+                # motion hold establishes front again before each walk.
+                front_after = self.aim(0, direct=True)
+            self.sample(0, front_after if front_after is not None else self.aim(0))
             self.ensure_running()
             state = self.hub.get_latest_state()
             completed = True

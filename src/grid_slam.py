@@ -244,6 +244,17 @@ class DFSExplorer:
                         raise RuntimeError('Incomplete scan; unknown directions cannot be traversed')
                     self.slam.update(ranges, heading, yaw, getattr(self.backend, "scan_headings", None))
                 self.slam.export(self.output, self.status)
+                # Every visited cell has already had its edges scanned. If no
+                # confirmed open edge leads to an unvisited cell, exploration
+                # is complete here; do not unwind the DFS stack to the start.
+                frontier_exists = any(
+                    self.slam.contains(neighbor(seen, d))
+                    and self.slam.map.wall(seen, d) is False
+                    and neighbor(seen, d) not in self.slam.map.visited
+                    for seen in self.slam.map.visited for d in range(4))
+                if not frontier_exists:
+                    self.status = 'completed'
+                    break
                 choices = [d for d in setting('slam.direction_order')
                            if self.slam.contains(neighbor(cell, d))
                            and self.slam.map.wall(cell, d) is False

@@ -48,6 +48,8 @@ def action_steps(data):
             elif kind == 'scan':
                 actions.append('MAP cell {}'.format(tuple(e['cell'])))
                 heading = round(e['pose'][2] / 90) % 4
+            elif kind == 'scan_skipped':
+                actions.append('MAP reuse cell {} (already scanned)'.format(tuple(e['cell'])))
             elif kind == 'finish':
                 actions.append('END: {}{}'.format(e['status'], ' | ' + e['error'] if e.get('error') else ''))
             elif kind in ('range_mismatch', 'wall_mismatch', 'odometry_mismatch', 'scan_position_drift', 'scan_pose_wait', 'scan_pose_recovered'):

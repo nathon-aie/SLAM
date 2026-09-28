@@ -106,9 +106,15 @@ and correct the continuous pose; this is not unrestricted metric pose-graph SLAM
             self.events.append({'timestamp': time.time(), 'type': 'odometry_mismatch',
                                 'cell': list(target), 'predicted_position_m': predicted[:],
                                 'expected_position_m': expected, 'error_m': error})
+        revisiting = target in self.map.visited
         self.cell = target
         self.pose = predicted + [yaw]
         self.variance = [v + setting('slam.motion_variance_m2') for v in self.variance]
+        # New cells get a corrected trajectory point after scanning. Revisits
+        # skip the scan, so retain their odometry point here.
+        if revisiting:
+            self.trajectory.append({'cell': list(self.cell), 'pose': list(self.pose),
+                                    'variance_m2': list(self.variance)})
 
     def update(self, ranges, heading, yaw, scan_headings=None):
         if not math.isfinite(yaw):
@@ -222,15 +228,21 @@ class DFSExplorer:
         try:
             while True:
                 cell = self.slam.cell
-                ranges, heading, yaw = self.backend.scan()
-                rear = (heading + 2) % 4
-                required = {(heading + r) % 4 for r in (0, 3, 1)}
-                full_scan = set(ranges) == set(range(4))
-                known_rear_scan = (self.moves > 0 and set(ranges) == required
-                                   and self.slam.map.wall(cell, rear) is False)
-                if not (full_scan or known_rear_scan):
-                    raise RuntimeError('Incomplete scan; unknown directions cannot be traversed')
-                self.slam.update(ranges, heading, yaw, getattr(self.backend, "scan_headings", None))
+                if cell in self.slam.map.visited:
+                    # Every edge was mapped on first arrival. The motion
+                    # backend still reads fresh front ToF before each step.
+                    self.slam.events.append({'timestamp': time.time(), 'type': 'scan_skipped',
+                                             'cell': list(cell), 'reason': 'previously_scanned'})
+                else:
+                    ranges, heading, yaw = self.backend.scan()
+                    rear = (heading + 2) % 4
+                    required = {(heading + r) % 4 for r in (0, 3, 1)}
+                    full_scan = set(ranges) == set(range(4))
+                    known_rear_scan = (self.moves > 0 and set(ranges) == required
+                                       and self.slam.map.wall(cell, rear) is False)
+                    if not (full_scan or known_rear_scan):
+                        raise RuntimeError('Incomplete scan; unknown directions cannot be traversed')
+                    self.slam.update(ranges, heading, yaw, getattr(self.backend, "scan_headings", None))
                 self.slam.export(self.output, self.status)
                 choices = [d for d in setting('slam.direction_order')
                            if self.slam.contains(neighbor(cell, d))

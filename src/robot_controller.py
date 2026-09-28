@@ -112,13 +112,22 @@ class RobotControllerThread(threading.Thread):
                 raise RuntimeError("Stale sensor stream: {}".format(name))
         if not all(math.isfinite(v) for v in (state.pos_x, state.pos_y, state.yaw, state.gimbal_yaw, state.gimbal_pitch)):
             raise RuntimeError("Non-finite pose or Gimbal angle")
-        if not self.front_ready or not state.tof_valid:
+        raw_tof = state.tof_raw
+        far_out_of_range = (isinstance(raw_tof, (int, float))
+                            and math.isfinite(raw_tof)
+                            and raw_tof > setting("sensors.tof_filter.max_valid"))
+        if not self.front_ready or not (state.tof_valid or far_out_of_range):
             raise RuntimeError("ToF is not ready and facing forward")
-        distance = self.calibration_manager.raw_to_mm("tof", state.tof_raw)
+        distance = self.calibration_manager.raw_to_mm("tof", raw_tof)
         if distance is None or not math.isfinite(distance) or distance <= 0:
             raise RuntimeError("Invalid front ToF")
-        # Use the smaller of raw/filtered distances: filtering must not delay braking.
-        return replace(state, tof_filtered_mm=min(distance, state.tof_filtered_mm))
+        filtered = state.tof_filtered_mm
+        if filtered is None or not math.isfinite(filtered) or filtered <= 0:
+            raise RuntimeError("Invalid filtered front ToF")
+        # A fresh reading beyond the far limit means no nearby wall. Keep the
+        # last filtered distance for braking, including if it is near.
+        # Close invalid readings and stale packets still fail above.
+        return replace(state, tof_valid=True, tof_filtered_mm=min(distance, filtered))
 
     def align_at_cell_center(self, duration_sec: float = setting("navigation.align_default_duration_sec")):
         """In-place PID fine alignment to ensure robot is centered (|L-R| < 2cm or L/R +- 2cm)."""

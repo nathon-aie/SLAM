@@ -175,6 +175,7 @@ class HardwareBackend:
     def sample(self, yaw, after):
         values = []
         rejected_ranges = []
+        capped_samples = 0
         fresh_packets = 0
         last = after
         deadline = time.monotonic() + setting('slam.sensor_timeout_sec')
@@ -188,8 +189,12 @@ class HardwareBackend:
                 fresh_packets += 1
                 raw = state.tof_raw
                 bounds = setting('sensors.tof_filter')
-                if raw is not None and math.isfinite(raw) and bounds['min_valid'] <= raw <= bounds['max_valid']:
-                    distance = self.system.calibration_mgr.raw_to_mm('tof', raw)
+                if raw is not None and math.isfinite(raw) and raw >= bounds['min_valid']:
+                    # A range beyond the configured limit is still evidence of
+                    # open space; cap it instead of aborting a distant scan.
+                    capped_samples += raw > bounds['max_valid']
+                    distance = self.system.calibration_mgr.raw_to_mm(
+                        'tof', min(raw, bounds['max_valid']))
                     if distance is not None and math.isfinite(distance) and distance > 0:
                         values.append(distance / 1000)
                 else:
@@ -197,7 +202,8 @@ class HardwareBackend:
                 if len(values) >= setting('slam.scan_samples'):
                     result = statistics.median(values)
                     self.event_log.append({'timestamp': time.time(), 'type': 'tof_sample',
-                                           'gimbal_yaw': yaw, 'range_m': result, 'accepted': len(values)})
+                                           'gimbal_yaw': yaw, 'range_m': result, 'accepted': len(values),
+                                           'capped_far_samples': capped_samples})
                     return result
             time.sleep(0.01)
         bounds = setting('sensors.tof_filter')

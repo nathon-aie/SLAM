@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Telemetry recorder and post-run analysis tools for RoboMaster EP.
 
-Records time-series sensor data from Thread 1, exports JSON runs,
+Records time-series sensor data from Thread 1, exports JSON and CSV runs,
 and generates statistical reports & matplotlib analysis charts.
 """
 
@@ -10,6 +10,7 @@ try:
 except ImportError:
     from settings import get as setting, project_path
 
+import csv
 import json
 import math
 import os
@@ -38,6 +39,17 @@ def get_next_run_number(base_dir: Path, prefix: str = "run") -> int:
                     pass
 
     return max(run_numbers) + 1 if run_numbers else 1
+
+
+def write_telemetry_csv(records, csv_path):
+    """Write sensor records in the same column order as their JSON snapshots."""
+    path = Path(csv_path)
+    with path.open('w', newline='', encoding='utf-8') as stream:
+        if records:
+            writer = csv.DictWriter(stream, fieldnames=list(records[0]))
+            writer.writeheader()
+            writer.writerows(records)
+    return path
 
 
 class TelemetryRecorder:
@@ -84,7 +96,7 @@ class TelemetryRecorder:
             return list(self._records)
 
     def export(self, custom_name: Optional[str] = None) -> Path:
-        """Save sensor records once, as JSON inside the run directory."""
+        """Save sensor records as JSON and CSV inside the run directory."""
         with self._lock:
             records = list(self._records)
 
@@ -105,7 +117,8 @@ class TelemetryRecorder:
         with json_path.open("w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False)
 
-        print(f"[TelemetryRecorder] Saved {len(records)} samples -> {json_path}")
+        csv_path = write_telemetry_csv(records, self.run_dir / f"{name}.csv")
+        print(f"[TelemetryRecorder] Saved {len(records)} samples -> {json_path} & {csv_path}")
         return json_path
 
 

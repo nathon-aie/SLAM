@@ -1,4 +1,5 @@
 """Post-run map, trajectory and action reports."""
+import csv
 import json
 import math
 from html import escape
@@ -125,6 +126,18 @@ document.getElementById('search').addEventListener('input',e=>{let q=e.target.va
     return Path(output)
 
 
+def save_events_csv(events, output):
+    """Export each SLAM event with its full payload for spreadsheet inspection."""
+    path = Path(output)
+    with path.open('w', newline='', encoding='utf-8') as stream:
+        writer = csv.writer(stream)
+        writer.writerow(['event_index', 'timestamp', 'type', 'details_json'])
+        for index, event in enumerate(events):
+            writer.writerow([index, event['timestamp'], event['type'],
+                             json.dumps(event, ensure_ascii=False)])
+    return path
+
+
 def save_report(map_file):
     import matplotlib
     matplotlib.use('Agg')
@@ -213,6 +226,7 @@ def save_report(map_file):
 
     figure.tight_layout()
     actions = save_actions_html(data, path.parent / 'actions.html')
+    save_events_csv(data['events'], path.parent / 'events.csv')
     plot = path.parent / 'map.png'
     figure.savefig(str(plot), dpi=160)
     plt.close(figure)
